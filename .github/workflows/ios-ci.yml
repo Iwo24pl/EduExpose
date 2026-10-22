@@ -22,7 +22,7 @@ jobs:
   build-test-package:
     name: Build, test, package
     runs-on: macos-latest
-    timeout-minutes: 45
+    timeout-minutes: 50
     steps:
       - uses: actions/checkout@v4
 
@@ -58,6 +58,41 @@ jobs:
           status=${PIPESTATUS[0]}
           exit $status
 
+      - name: Summarize tests
+        if: always()
+        shell: bash
+        run: |
+          xcrun xcresulttool get test-results summary \
+            --path TestResults.xcresult \
+            --format json > test-summary.json 2>/dev/null || echo '{}' > test-summary.json
+          cat test-summary.json
+
+      - name: Smoke launch in simulator
+        shell: bash
+        run: |
+          set -euo pipefail
+          UDID=$(python3 .github/scripts/pick_simulator.py)
+          APP=$(find "$HOME/Library/Developer/Xcode/DerivedData" \
+            -path "*/Build/Products/Debug-iphonesimulator/EduExpose.app" \
+            -print -quit)
+          if [ -z "$APP" ]; then
+            echo "EduExpose.app was not built"
+            exit 1
+          fi
+          echo "Installing $APP"
+          xcrun simctl boot "$UDID" || true
+          xcrun simctl bootstatus "$UDID" -b
+          xcrun simctl terminate "$UDID" com.iwo24pl.eduexpose || true
+          xcrun simctl install "$UDID" "$APP"
+          xcrun simctl launch "$UDID" com.iwo24pl.eduexpose
+          sleep 8
+          if xcrun simctl spawn "$UDID" launchctl list | grep -q com.iwo24pl.eduexpose; then
+            echo "Smoke test passed: the app is still running after launch."
+          else
+            echo "Smoke test failed: the app exited after launch."
+            exit 1
+          fi
+
       - name: Upload build log
         if: always()
         uses: actions/upload-artifact@v4
@@ -71,7 +106,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: test-results
-          path: TestResults.xcresult
+          path: |
+            TestResults.xcresult
+            test-summary.json
           if-no-files-found: ignore
 
       - name: Publish failing build log
@@ -85,8 +122,10 @@ jobs:
           make_latest: false
           body: |
             Log z nieudanego builda ${{ github.sha }}.
-            Pobierz `build.log`, aby zobaczyć błędy kompilacji i testów.
-          files: build.log
+            Pobierz `build.log` i `test-summary.json`, aby zobaczyć błędy.
+          files: |
+            build.log
+            test-summary.json
 
       - name: Build unsigned archive
         shell: bash
@@ -137,3 +176,5 @@ jobs:
           files: |
             EduExpose-unsigned.ipa
             EduExpose-unsigned.ipa.sha256
+            test-summary.json
+            build.log
