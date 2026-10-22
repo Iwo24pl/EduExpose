@@ -1,78 +1,44 @@
 import SwiftUI
 
 struct RootView: View {
+    @State private var model = AppModel()
+
     var body: some View {
-        TabView {
-            Tab("Start", systemImage: "house") {
-                PlaceholderScreen(
-                    title: "Start",
-                    message: "Tutaj pojawi się numer szczęścia, ostatnie oceny i najbliższe sprawdziany."
-                )
-            }
-
-            Tab("Oceny", systemImage: "list.number") {
-                PlaceholderScreen(
-                    title: "Oceny",
-                    message: "Przegląd ocen, średnich i podsumowań okresowych."
-                )
-            }
-
-            Tab("Plan", systemImage: "calendar") {
-                PlaceholderScreen(
-                    title: "Plan",
-                    message: "Tygodniowy plan lekcji wraz z zastępstwami."
-                )
-            }
-
-            Tab("Sprawdziany", systemImage: "checklist") {
-                PlaceholderScreen(
-                    title: "Sprawdziany",
-                    message: "Sprawdziany, kartkówki i zadania domowe."
-                )
-            }
-
-            Tab("Więcej", systemImage: "ellipsis.circle") {
-                PlaceholderScreen(
-                    title: "Więcej",
-                    message: "Notatki, ogłoszenia, wiadomości i zarządzanie kontem."
-                )
+        Group {
+            switch model.phase {
+            case .launching:
+                LaunchView()
+            case .login:
+                LoginView()
+            case .students:
+                StudentsView()
+            case .dashboard:
+                DashboardView()
             }
         }
-        .tint(Palette.primary)
-        .tabBarMinimizeBehavior(.onScrollDown)
+        .environment(model)
+        .task {
+            await model.bootstrap()
+        }
     }
 }
 
-private struct PlaceholderScreen: View {
-    let title: String
-    let message: String
-
+private struct LaunchView: View {
     var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    GlassCard {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("EduExpose")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(Palette.primary)
-                                .textCase(.uppercase)
-                                .tracking(1.2)
-
-                            Text(message)
-                                .font(.body)
-                                .foregroundStyle(Palette.onSurface)
-                        }
-                    }
-
-                    Text("Szkielet M0 · ekrany w budowie")
-                        .font(.footnote)
-                        .foregroundStyle(Palette.onSurfaceVariant)
-                }
-                .padding(20)
+        ZStack {
+            ScreenBackground()
+            VStack(spacing: 18) {
+                Image(systemName: "graduationcap.fill")
+                    .font(.system(size: 42))
+                    .foregroundStyle(Palette.primary)
+                    .glassEffect(.regular, in: .circle)
+                    .frame(width: 88, height: 88)
+                ProgressView()
+                    .tint(Palette.primary)
+                Text("EduExpose")
+                    .font(.headline)
+                    .foregroundStyle(Palette.onSurface)
             }
-            .background(ScreenBackground())
-            .navigationTitle(title)
         }
     }
 }

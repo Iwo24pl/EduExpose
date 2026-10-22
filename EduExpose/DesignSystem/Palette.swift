@@ -57,6 +57,8 @@ enum Palette {
     static let onSurfaceVariant = adaptive("44483D", "C5C8BA")
     static let outline = adaptive("75796C", "8F9285")
     static let error = adaptive("BA1A1A", "FFB4AB")
+    static let success = adaptive("2F6B3A", "9BD48A")
+    static let warning = adaptive("8A5A00", "FFC46B")
 
     private static func adaptive(_ light: String, _ dark: String) -> Color {
         Color(uiColor: UIColor { traits in
