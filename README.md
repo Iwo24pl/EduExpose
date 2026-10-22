@@ -1,49 +1,55 @@
-# Dzienniczek Szpontniczek
+# EduExpose
 
-[![Skala szpontu](https://img.shields.io/badge/szpont_kwantowy-w_skali_szpontu-blue)](https://github.com/szponciciel04/DzienniczekSzpontniczek)
-[![Repo size](https://img.shields.io/github/repo-size/szponciciel04/DzienniczekSzpontniczek)](https://github.com/szponciciel04/DzienniczekSzpontniczek)
-[![Last commit](https://img.shields.io/github/last-commit/szponciciel04/DzienniczekSzpontniczek)](https://github.com/szponciciel04/DzienniczekSzpontniczek/commits)
-[![Issues](https://img.shields.io/github/issues/szponciciel04/DzienniczekSzpontniczek)](https://github.com/szponciciel04/DzienniczekSzpontniczek/issues)
-[![Top language](https://img.shields.io/github/languages/top/szponciciel04/DzienniczekSzpontniczek)](https://github.com/szponciciel04/DzienniczekSzpontniczek)
+Natywny klient eduVULCAN dla iOS, napisany w SwiftUI. Przepisanie projektu
+Dzienniczek Szpontniczek (Szpontium) z Kotlina/Compose na Swift 6 i Liquid Glass.
 
-Dzienniczek Szpontniczek (codename: Szpontium) to pierwszy w pełni naszponcony client eduVULCAN
+Status: **M0 — szkielet projektu**. Aplikacja buduje się, uruchamia i pokazuje
+pięć zakładek. Logowanie i dane pojawią się w kolejnych etapach.
 
-Projekt został całkowicie przyszponcony w paru promptach przy użyciu Szpont Maszyny z modelem Claude Sonnet 4.6
+## Wymagania
 
-![Szpont](./artwork/szpont-detected.jpg)
+- iOS 26.0+
+- Xcode 26
+- XcodeGen
 
-## Funkcje aplikacji
+## Budowanie
 
-Dzienniczek Szpontniczek pozwala korzystać z najważniejszych funkcji e-dziennika VULCAN i eduVULCAN w jednej aplikacji.
+    brew install xcodegen
+    xcodegen generate
+    open EduExpose.xcodeproj
 
-- logowanie i rejestracja urządzenia dla Dzienniczka VULCAN oraz eduVULCAN,
-- podgląd ocen, średnich i podsumowań okresowych,
-- przegląd sprawdzianów, kartkówek i zadań domowych,
-- plan lekcji (w tym zastępstwa) oraz lekcje zaplanowane i zrealizowane,
-- frekwencja wraz ze statystykami miesięcznymi i przedmiotowymi,
-- uwagi, ogłoszenia i wiadomości,
-- informacje o nauczycielach, szkole, wycieczkach, wydarzeniach i dniach wolnych.
+Albo bez otwierania Xcode:
 
-## Skala Szpontu
+    xcodebuild -project EduExpose.xcodeproj -scheme EduExpose \
+      -destination 'generic/platform=iOS Simulator' \
+      CODE_SIGNING_ALLOWED=NO build
 
-<img src="./artwork/szpont-scale.png" alt="Szpont" width="400">
+## Testy
 
-Cały projekt uplasował się na miejscu "Szpont Kwantowy" w Skali Szpontu
+    xcodebuild -project EduExpose.xcodeproj -scheme EduExpose \
+      -destination 'platform=iOS Simulator,name=iPhone 17' test
 
-## Dokumentacja
+## Instalacja na iPhonie bez konta deweloperskiego
 
-Więcej szczegółów znajdziesz w dokumentacji projektu:
+Każdy zielony build gałęzi `swift` trafia jako niepodpisane IPA do wydania
+[`latest`](https://github.com/Iwo24pl/EduExpose/releases/tag/latest).
+Podpisz je Sideloadly swoim darmowym Apple ID — szczegóły w
+[docs/sideloading.md](docs/sideloading.md). Certyfikat wygasa po 7 dniach.
 
-- [Getting started](docs/getting-started.md)
-- [Basic usage](docs/basic-usage.md)
-- [Logowanie i klient HebeCE](docs/login-and-hebece-client.md)
-- [Flow logowania eduVULCAN](docs/eduvulcan-login-flow.md)
-- [Prometheus login helper](docs/prometheus-login-helper.md)
+## Architektura
 
-UWAGA! ta dokumentacja jest całkowcie przyszponcona przez Szpont Maszynę.
+- `EduExpose/App` — punkt wejścia i nawigacja
+- `EduExpose/DesignSystem` — paleta, typografia, Liquid Glass
+- `EduExpose/Core` — sesja, Keychain, sieć (w budowie)
+- `EduExpose/API` — Prometheus (logowanie) i Hebe (REST) (w budowie)
+- `EduExpose/Features` — ekrany funkcji (w budowie)
 
-## Podziękowania
+Plan, zakres i decyzje: [docs/roadmap.md](docs/roadmap.md).
 
-Serdeczne podziękowania dla Szpont Maszyny która pozwoliła naszponcić cały ten projekt 
-Dziękujemy aplikacji Szkolny.eu za użycie kodu do działania dziennika Librus.
+## Status prawny
 
+Nieoficjalny klient. Projekt nie jest powiązany z VULCAN ani eduVULCAN.
+Korzysta z tych samych endpointów co aplikacja Dzienniczek VULCAN.
+
+Projekt jest kontynuacją Dzienniczka Szpontniczek (licencja MIT) i zachowuje
+jego historię oraz notice w pliku LICENSE.
