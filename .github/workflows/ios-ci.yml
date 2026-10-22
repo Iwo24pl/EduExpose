@@ -87,7 +87,6 @@ jobs:
           xcrun simctl launch "$UDID" com.iwo24pl.eduexpose
           sleep 8
           xcrun simctl io "$UDID" screenshot login.png
-          cp login.png "$GITHUB_WORKSPACE/login.png"
           if xcrun simctl spawn "$UDID" launchctl list | grep -q com.iwo24pl.eduexpose; then
             echo "Smoke test passed: the app is still running after launch."
           else
