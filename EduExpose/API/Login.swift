@@ -56,6 +56,10 @@ struct PrometheusLoginService {
     private let base = "https://eduvulcan.pl"
     private let userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36"
 
+    init(session: URLSession) {
+        self.session = session
+    }
+
     func signIn(login: String, password: String) async throws -> [StoredStudent] {
         let showCaptcha = await queryUserInfo(login)
         let html = try await loginPage()
