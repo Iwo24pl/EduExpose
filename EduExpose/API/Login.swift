@@ -1,5 +1,6 @@
 import Foundation
 import CryptoKit
+import os
 
 enum LoginError: LocalizedError {
     case csrf
@@ -50,11 +51,96 @@ struct JwtPayload: Decodable {
     let tenant: String
 }
 
+/// Parsing helpers for the eduVULCAN web login page.
+enum LoginPage {
+    struct Captcha {
+        let challenge: String
+        let difficulty: UInt32
+        let rounds: Int
+    }
+
+    /// Reads the anti-forgery token from the hidden input rendered by ASP.NET.
+    static func csrfToken(in html: String) -> String? {
+        let pattern = #"<input[^>]*\bname\s*=\s*(?:"__RequestVerificationToken"|'__RequestVerificationToken'|__RequestVerificationToken\b)[^>]*>"#
+        guard let tag = firstMatch(html, pattern)?.first else { return nil }
+        return attribute(tag, "value")
+    }
+
+    /// Reads the proof-of-work captcha challenge from `div.captcha-wrapper`.
+    static func captcha(in html: String) -> Captcha? {
+        let pattern = #"<div[^>]*\bclass\s*=\s*"[^"]*captcha-wrapper[^"]*"[^>]*>"#
+        guard let tag = firstMatch(html, pattern)?.first,
+              let challenge = attribute(tag, "data-challenge"),
+              let difficulty = attribute(tag, "data-difficulty").flatMap(UInt32.init),
+              let rounds = attribute(tag, "data-rounds").flatMap(Int.init) else {
+            return nil
+        }
+        return Captcha(challenge: challenge, difficulty: difficulty, rounds: rounds)
+    }
+
+    /// Reads `data.ShowCaptcha` from `POST /Account/QueryUserInfo`.
+    /// Returns `nil` when the payload is not the expected object.
+    static func showCaptcha(in data: Data) -> Bool? {
+        guard let json = try? JSONSerialization.jsonObject(with: data),
+              let object = json as? [String: Any],
+              let payload = object["data"] as? [String: Any] else {
+            return nil
+        }
+        if let flag = payload["ShowCaptcha"] as? Bool { return flag }
+        if let text = payload["ShowCaptcha"] as? String {
+            return text.caseInsensitiveCompare("true") == .orderedSame
+        }
+        return nil
+    }
+
+    /// The portal re-renders the login form when the captcha answer is missing or too slow.
+    static func isCaptchaRejection(_ html: String) -> Bool {
+        let normalized = html.folding(
+            options: [.diacriticInsensitive, .caseInsensitive],
+            locale: Locale(identifier: "en_US_POSIX")
+        )
+        return normalized.contains("poczekaj przed przejsciem dalej")
+    }
+
+    static func firstMatch(_ text: String, _ pattern: String) -> [String]? {
+        guard let regex = try? NSRegularExpression(
+            pattern: pattern,
+            options: [.caseInsensitive, .dotMatchesLineSeparators]
+        ) else {
+            return nil
+        }
+        let nsText = text as NSString
+        guard let match = regex.firstMatch(
+            in: text,
+            range: NSRange(location: 0, length: nsText.length)
+        ) else {
+            return nil
+        }
+        var groups: [String] = []
+        for index in 0..<match.numberOfRanges {
+            let range = match.range(at: index)
+            groups.append(range.location == NSNotFound ? "" : nsText.substring(with: range))
+        }
+        return groups
+    }
+
+    static func attribute(_ tag: String, _ name: String) -> String? {
+        let pattern = #"(?:\s|<)"#
+            + NSRegularExpression.escapedPattern(for: name)
+            + #"\s*=\s*(?:"([^"]*)"|'([^']*)')"#
+        guard let groups = firstMatch(tag, pattern), groups.count > 2 else { return nil }
+        return groups[1].isEmpty ? groups[2] : groups[1]
+    }
+}
+
 /// Signs in through the eduVULCAN web portal and registers Hebe CE devices.
 struct PrometheusLoginService {
     let session: URLSession
     private let base = "https://eduvulcan.pl"
     private let userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36"
+    private let acceptLanguage = "pl-PL,pl;q=0.9,en;q=0.8"
+    private let acceptHTML = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+    private let logger = Logger(subsystem: "com.iwo24pl.eduexpose", category: "login")
 
     init(session: URLSession) {
         self.session = session
@@ -67,22 +153,21 @@ struct PrometheusLoginService {
             throw LoginError.emailNotConfirmed
         }
 
-        guard let csrfTag = firstMatch(html, "<input[^>]*name=\"__RequestVerificationToken\"[^>]*>")?.first,
-              let csrf = attribute(csrfTag, "value") else {
+        guard let csrf = LoginPage.csrfToken(in: html) else {
             throw LoginError.csrf
         }
 
         var captcha = ""
-        if showCaptcha {
-            guard let wrapper = firstMatch(html, "<div[^>]*class=\"[^\"]*captcha-wrapper[^\"]*\"[^>]*>")?.first,
-                  let challenge = attribute(wrapper, "data-challenge"),
-                  let difficultyText = attribute(wrapper, "data-difficulty"),
-                  let difficulty = UInt32(difficultyText),
-                  let roundsText = attribute(wrapper, "data-rounds"),
-                  let rounds = Int(roundsText) else {
+        let challenge = LoginPage.captcha(in: html)
+        if showCaptcha ?? (challenge != nil) {
+            guard let challenge else {
                 throw LoginError.captcha
             }
-            captcha = captchaResponse(challenge: challenge, difficulty: difficulty, rounds: rounds)
+            captcha = captchaResponse(
+                challenge: challenge.challenge,
+                difficulty: challenge.difficulty,
+                rounds: challenge.rounds
+            )
         }
 
         try await postLogin(login: login, password: password, csrf: csrf, captcha: captcha)
@@ -129,51 +214,100 @@ struct PrometheusLoginService {
 
     // MARK: Portal steps
 
-    private func queryUserInfo(_ login: String) async -> Bool {
-        guard let url = URL(string: base + "/Account/QueryUserInfo") else { return false }
+    /// Returns `nil` when the portal could not be asked, so the caller can fall back
+    /// to the captcha element rendered on the login page.
+    private func queryUserInfo(_ login: String) async -> Bool? {
+        guard let url = URL(string: base + "/Account/QueryUserInfo") else { return nil }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
         request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
-        request.httpBody = formBody([("UserName", login)])
-        let result = try? await session.data(for: request)
-        guard let data = result?.0 else { return false }
-        guard let json = try? JSONSerialization.jsonObject(with: data),
-              let object = json as? [String: Any],
-              let payload = object["data"] as? [String: Any] else {
-            return false
+        request.setValue("application/json, text/javascript, */*; q=0.01", forHTTPHeaderField: "Accept")
+        request.setValue(acceptLanguage, forHTTPHeaderField: "Accept-Language")
+        // The portal expects `alias`; `UserName` is the form field and returns a bare boolean.
+        request.httpBody = formBody([("alias", login)])
+        guard let (data, response) = try? await session.data(for: request) else {
+            return nil
         }
-        if let flag = payload["ShowCaptcha"] as? Bool { return flag }
-        if let text = payload["ShowCaptcha"] as? String { return text.lowercased() == "true" }
-        return false
+        if let http = response as? HTTPURLResponse, http.statusCode != 200 {
+            logger.warning("QueryUserInfo zwróciło HTTP \(http.statusCode)")
+            return nil
+        }
+        let parsed = LoginPage.showCaptcha(in: data)
+        let description = parsed.map { $0 ? "true" : "false" } ?? "brak danych"
+        logger.debug("QueryUserInfo: ShowCaptcha=\(description)")
+        return parsed
     }
 
+    /// Fetches the login page with a clean portal session, retrying once when the form is missing.
     private func loginPage() async throws -> String {
+        clearPortalCookies()
+        var lastError: Error?
+        var sawPage = false
+
+        for attempt in 0..<2 {
+            if attempt > 0 {
+                clearPortalCookies()
+                await visitHomePage()
+            }
+            do {
+                let (html, response) = try await fetchLoginPage()
+                lastError = nil
+                sawPage = true
+                if LoginPage.csrfToken(in: html) != nil
+                    || html.contains("Twój adres e-mail nie został jeszcze potwierdzony.") {
+                    return html
+                }
+                let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+                let url = response.url?.absoluteString ?? "-"
+                logger.warning("Strona logowania bez tokenu CSRF: HTTP \(status), \(url, privacy: .public), \(html.count) znaków")
+            } catch {
+                lastError = error
+                logger.error("Nie udało się pobrać strony logowania: \(String(describing: error), privacy: .public)")
+            }
+        }
+
+        if let lastError, !sawPage {
+            throw lastError
+        }
+        throw LoginError.csrf
+    }
+
+    private func fetchLoginPage() async throws -> (String, URLResponse) {
         guard let url = URL(string: base + "/logowanie") else {
             throw LoginError.api("Nieprawidłowy adres logowania.")
         }
         var request = URLRequest(url: url)
         request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
-        let (data, _) = try await session.data(for: request)
-        return String(decoding: data, as: UTF8.self)
+        request.setValue(acceptHTML, forHTTPHeaderField: "Accept")
+        request.setValue(acceptLanguage, forHTTPHeaderField: "Accept-Language")
+        request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
+        let (data, response) = try await session.data(for: request)
+        return (String(decoding: data, as: UTF8.self), response)
+    }
+
+    private func visitHomePage() async {
+        guard let url = URL(string: base + "/") else { return }
+        var request = URLRequest(url: url)
+        request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue(acceptHTML, forHTTPHeaderField: "Accept")
+        request.setValue(acceptLanguage, forHTTPHeaderField: "Accept-Language")
+        _ = try? await session.data(for: request)
     }
 
     private func postLogin(login: String, password: String, csrf: String, captcha: String) async throws {
         guard let url = URL(string: base + "/logowanie") else {
             throw LoginError.api("Nieprawidłowy adres logowania.")
         }
-        let configuration = session.configuration
-        let noRedirectSession = URLSession(
-            configuration: configuration,
-            delegate: NoRedirectDelegate(),
-            delegateQueue: nil
-        )
-        defer { noRedirectSession.finishTasksAndInvalidate() }
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
         request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue(acceptHTML, forHTTPHeaderField: "Accept")
+        request.setValue(acceptLanguage, forHTTPHeaderField: "Accept-Language")
+        request.setValue(base + "/logowanie", forHTTPHeaderField: "Referer")
+        request.setValue(base, forHTTPHeaderField: "Origin")
         request.httpBody = formBody([
             ("UserName", login),
             ("Password", password),
@@ -181,21 +315,25 @@ struct PrometheusLoginService {
             ("__RequestVerificationToken", csrf)
         ])
 
-        let (data, response) = try await noRedirectSession.data(for: request)
+        let (data, response) = try await session.data(for: request, delegate: NoRedirectDelegate())
         let body = String(decoding: data, as: UTF8.self)
+
         if body.contains("Twój adres e-mail nie został jeszcze potwierdzony.") {
             throw LoginError.emailNotConfirmed
-        }
-        let lowered = body.lowercased()
-        if lowered.contains("robot") || lowered.contains("robak") {
-            throw LoginError.captcha
         }
         guard let http = response as? HTTPURLResponse else {
             throw LoginError.api("Serwer nie odpowiedział.")
         }
-        guard http.value(forHTTPHeaderField: "Location") != nil else {
-            throw LoginError.invalidCredentials
+        if http.statusCode >= 500 {
+            throw LoginError.api("Serwer logowania zwrócił błąd \(http.statusCode). Spróbuj ponownie.")
         }
+        if http.value(forHTTPHeaderField: "Location") != nil {
+            return
+        }
+        if LoginPage.isCaptchaRejection(body) {
+            throw LoginError.captcha
+        }
+        throw LoginError.invalidCredentials
     }
 
     private func apiApWithConsent() async throws -> ApiApResponse {
@@ -247,11 +385,23 @@ struct PrometheusLoginService {
         _ = try await session.data(for: request)
     }
 
+    // MARK: Cookies
+
+    /// Drops all portal cookies so a stale or signed-in session cannot hijack `/logowanie`.
+    private func clearPortalCookies() {
+        let storage = session.configuration.httpCookieStorage ?? .shared
+        guard let url = URL(string: base) else { return }
+        for cookie in storage.cookies(for: url) ?? [] {
+            storage.deleteCookie(cookie)
+        }
+    }
+
     // MARK: Decoding
 
     private func decodeApiAp(_ html: String) throws -> ApiApResponse {
-        guard let tag = firstMatch(html, "<input[^>]*id=\"ap\"[^>]*>")?.first,
-              let raw = attribute(tag, "value") else {
+        let pattern = #"<input[^>]*\bid\s*=\s*(?:"ap"|'ap'|ap\b)[^>]*>"#
+        guard let tag = LoginPage.firstMatch(html, pattern)?.first,
+              let raw = LoginPage.attribute(tag, "value") else {
             throw LoginError.api("Nie znaleziono danych logowania w odpowiedzi /api/ap.")
         }
         guard let data = raw.htmlUnescaped.data(using: .utf8) else {
@@ -322,27 +472,6 @@ struct PrometheusLoginService {
         var components = URLComponents()
         components.queryItems = pairs.map { URLQueryItem(name: $0.0, value: $0.1) }
         return Data((components.percentEncodedQuery ?? "").utf8)
-    }
-
-    private func firstMatch(_ text: String, _ pattern: String) -> [String]? {
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators]) else {
-            return nil
-        }
-        let nsText = text as NSString
-        guard let match = regex.firstMatch(in: text, range: NSRange(location: 0, length: nsText.length)) else {
-            return nil
-        }
-        var groups: [String] = []
-        for index in 0..<match.numberOfRanges {
-            let range = match.range(at: index)
-            groups.append(range.location == NSNotFound ? "" : nsText.substring(with: range))
-        }
-        return groups
-    }
-
-    private func attribute(_ tag: String, _ name: String) -> String? {
-        let pattern = name + "=\"([^\"]*)\""
-        return firstMatch(tag, pattern)?[1]
     }
 }
 
