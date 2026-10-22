@@ -49,7 +49,7 @@ actor HebeClient {
             "pupilId": String(pupilId),
             "periodId": String(periodId),
             "lastSyncDate": Self.epoch,
-            "lastId": String(Int.min),
+            "lastId": "-2147483648",
             "pageSize": "500"
         ], pupilId: pupilId)
     }
@@ -59,7 +59,7 @@ actor HebeClient {
             "unitId": String(unitId),
             "pupilId": String(pupilId),
             "periodId": String(periodId),
-            "lastId": String(Int.min),
+            "lastId": "-2147483648",
             "pageSize": "500",
             "scope": "auto"
         ], pupilId: pupilId)
@@ -73,7 +73,7 @@ actor HebeClient {
             "dateFrom": from,
             "dateTo": to,
             "lastSyncDate": Self.epoch,
-            "lastId": String(Int.min),
+            "lastId": "-2147483648",
             "pageSize": "500"
         ], pupilId: pupilId)
     }
@@ -84,7 +84,7 @@ actor HebeClient {
             "dateFrom": from,
             "dateTo": to,
             "lastSyncDate": Self.epoch,
-            "lastId": String(Int.min),
+            "lastId": "-2147483648",
             "pageSize": "500"
         ], pupilId: pupilId)
     }
@@ -96,7 +96,7 @@ actor HebeClient {
             "pupilId": String(pupilId),
             "dateFrom": from,
             "dateTo": to,
-            "lastId": String(Int.min),
+            "lastId": "-2147483648",
             "pageSize": "500",
             "lastSyncDate": Self.epoch
         ], pupilId: pupilId)
@@ -107,7 +107,7 @@ actor HebeClient {
     func notes(pupilId: Int) async throws -> [Note] {
         try await fetch([Note].self, path: "mobile/note/byPupil", query: [
             "pupilId": String(pupilId),
-            "lastId": String(Int.min),
+            "lastId": "-2147483648",
             "pageSize": "500",
             "lastSyncDate": Self.epoch
         ], pupilId: pupilId)
@@ -118,7 +118,7 @@ actor HebeClient {
             "unitId": String(unitId),
             "pupilId": String(pupilId),
             "view": "6",
-            "lastId": String(Int.min),
+            "lastId": "-2147483648",
             "pageSize": "500"
         ], pupilId: pupilId)
     }
@@ -146,7 +146,7 @@ actor HebeClient {
         return try await fetch([Message].self, path: path, query: [
             "box": box,
             "pupilId": String(pupilId),
-            "lastId": String(Int.min),
+            "lastId": "-2147483648",
             "pageSize": "500",
             "lastSyncDate": Self.epoch
         ], pupilId: pupilId)
@@ -213,7 +213,7 @@ actor HebeClient {
             throw VulcanError.invalidResponse
         }
 
-        let body = payload.map { try? Self.bodyData($0) } ?? nil
+        let body: Data? = payload.flatMap { try? Self.bodyData($0) }
         var request = URLRequest(url: url)
         request.httpMethod = method
         request.timeoutInterval = 60

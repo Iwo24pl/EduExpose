@@ -240,13 +240,13 @@ final class AppModel {
             .prefix(5)
 
         let upcomingExams = allExams
-            .filter { $0.deadline >= VulcanDate.dateString(today) }
-            .sorted { $0.deadline < $1.deadline }
+            .filter { $0.deadlineAt >= VulcanDate.dateString(today) }
+            .sorted { $0.deadlineAt < $1.deadlineAt }
             .prefix(4)
 
         let upcomingHomework = allHomework
-            .filter { $0.deadline >= VulcanDate.dateString(today) }
-            .sorted { $0.deadline < $1.deadline }
+            .filter { $0.deadlineAt >= VulcanDate.dateString(today) }
+            .sorted { $0.deadlineAt < $1.deadlineAt }
             .prefix(4)
 
         return StartSnapshot(

@@ -132,8 +132,10 @@ struct PrometheusLoginService {
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
         request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
         request.httpBody = formBody([("UserName", login)])
-        guard let (data, _) = try? await session.data(for: request),
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+        let result = try? await session.data(for: request)
+        guard let data = result?.0 else { return false }
+        guard let json = try? JSONSerialization.jsonObject(with: data),
+              let object = json as? [String: Any],
               let payload = object["data"] as? [String: Any] else {
             return false
         }
@@ -187,7 +189,7 @@ struct PrometheusLoginService {
         guard let http = response as? HTTPURLResponse else {
             throw LoginError.api("Serwer nie odpowiedział.")
         }
-        if http.value(forHTTPHeaderField: "Location") == nil && !(300...399).contains(http.statusCode) {
+        guard http.value(forHTTPHeaderField: "Location") != nil else {
             throw LoginError.invalidCredentials
         }
     }

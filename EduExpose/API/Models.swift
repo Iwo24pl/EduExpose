@@ -17,7 +17,7 @@ extension JSONDecoder {
             guard let key = keys.last?.stringValue, let first = key.first else {
                 return AnyCodingKey(stringValue: "")
             }
-            return AnyCodingKey(stringValue: first.lowercased() + key.dropFirst())
+            return AnyCodingKey(stringValue: first.lowercased() + String(key.dropFirst()))
         }
         return decoder
     }
@@ -199,7 +199,7 @@ struct Exam: Codable, Identifiable, Sendable {
     let type: String
     let typeId: Int?
     let content: String
-    let deadline: String
+    let deadlineAt: String
     let createdAt: String?
     let subject: Subject
     let creator: Employee?
@@ -210,8 +210,8 @@ struct Homework: Codable, Identifiable, Sendable {
     let key: String?
     let content: String
     let isAnswerRequired: Bool?
-    let date: String?
-    let deadline: String
+    let dateAt: String?
+    let deadlineAt: String
     let subject: Subject
     let creator: Employee?
     let attachments: [Attachment]?
@@ -226,8 +226,8 @@ struct NoteCategory: Codable, Sendable {
 struct Note: Codable, Identifiable, Sendable {
     let id: Int
     let positive: Bool
-    let dateValid: String
-    let dateModify: String?
+    let validAt: String
+    let modifiedAt: String?
     let category: NoteCategory?
     let content: String
     let points: Int?
@@ -236,12 +236,12 @@ struct Note: Codable, Identifiable, Sendable {
 
 struct Announcement: Codable, Identifiable, Sendable {
     let id: Int
-    let unitId: Int?
+    let idUnit: Int?
     let title: String
     let content: String
     let category: String?
-    let dateFrom: String?
-    let dateTo: String?
+    let from: String?
+    let to: String?
     let sender: Employee?
     let createdAt: String?
     let attachments: [Attachment]?
@@ -271,7 +271,7 @@ struct Timeslot: Codable, Identifiable, Sendable {
 
 struct ScheduleSubstitution: Codable, Sendable {
     let id: Int
-    let date: String?
+    let dateAt: String?
     let pupilNote: String?
     let reason: String?
     let event: String?
@@ -291,7 +291,7 @@ struct Schedule: Codable, Identifiable, Sendable {
     let id: Int
     let mergeChangeId: Int?
     let event: String?
-    let date: String
+    let dateAt: String
     let room: Room?
     let timeSlot: Timeslot
     let subject: Subject?
@@ -308,12 +308,12 @@ struct Schedule: Codable, Identifiable, Sendable {
 
     var isRescheduled: Bool {
         guard let sub = substitution else { return false }
-        if let subDate = sub.date, subDate != date { return true }
+        if let subDate = sub.dateAt, subDate != dateAt { return true }
         if let slot = sub.timeSlot, slot.position != timeSlot.position { return true }
         return false
     }
 
-    var effectiveDate: String { substitution?.date ?? date }
+    var effectiveDate: String { substitution?.dateAt ?? dateAt }
     var effectiveSlot: Timeslot { substitution?.timeSlot ?? timeSlot }
     var effectiveSubject: Subject? { substitution?.subject ?? subject }
     var effectiveTeacher: Employee? { substitution?.teacherPrimary ?? teacherPrimary }
