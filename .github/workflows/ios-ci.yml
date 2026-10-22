@@ -46,20 +46,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          UDID=$(xcrun simctl list devices available -j | python3 -c '
-import json, sys
-devices = json.load(sys.stdin)["devices"]
-candidates = [
-    (runtime, device)
-    for runtime, items in devices.items()
-    for device in items
-    if device.get("isAvailable") and "iPhone" in device["name"]
-]
-candidates.sort(key=lambda pair: pair[0], reverse=True)
-if not candidates:
-    sys.exit("No available iPhone simulator found")
-print(candidates[0][1]["udid"])
-')
+          UDID=$(python3 .github/scripts/pick_simulator.py)
           echo "Using simulator $UDID"
           set +e
           xcodebuild -project "$PROJECT" -scheme "$SCHEME" \
