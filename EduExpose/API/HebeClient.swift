@@ -15,7 +15,15 @@ actor HebeClient {
     init(student: StoredStudent, session: URLSession) {
         self.credential = student.credential
         self.session = session
-        self.restUrl = student.restUrl
+        self.restUrl = Self.dataEndpoint(for: student.account, fallback: student.restUrl)
+    }
+
+    /// Data endpoints live on the unit endpoint (`/<tenant>/<unit>/api`), not on
+    /// the tenant endpoint used to list accounts. Calling the tenant endpoint
+    /// without the unit symbol returns status 104 (`Brak symbolu jednostki`).
+    static func dataEndpoint(for account: Account, fallback: String) -> String {
+        let unit = account.unit.restURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        return unit.isEmpty ? fallback : unit
     }
 
     // MARK: Registration

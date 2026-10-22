@@ -197,7 +197,10 @@ struct PrometheusLoginService {
                     id: account.id,
                     account: account,
                     credential: credential,
-                    restUrl: credential.restUrl ?? "",
+                    restUrl: HebeClient.dataEndpoint(
+                        for: account,
+                        fallback: credential.restUrl ?? ""
+                    ),
                     login: login,
                     password: password,
                     tenant: tenant,

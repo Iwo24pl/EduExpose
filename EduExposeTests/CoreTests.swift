@@ -56,6 +56,46 @@ struct ModelDecodingTests {
     }
 }
 
+struct HebeEndpointTests {
+    private func account(unitRestURL: String) -> Account {
+        Account(
+            classDisplay: "2et",
+            infoDisplay: nil,
+            unit: SchoolUnit(
+                id: 3,
+                symbol: "OpoleZSE",
+                short: "ZSE",
+                restURL: unitRestURL,
+                name: "Zespół Szkół Elektrycznych",
+                displayName: "Zespół Szkół Elektrycznych"
+            ),
+            constituentUnit: ConstituentUnit(id: 3, short: "PT5", name: "Technikum"),
+            pupil: Pupil(id: 2137, firstName: "Laura", secondName: nil, surname: "Karaś"),
+            periods: nil,
+            journal: nil,
+            messageBox: nil
+        )
+    }
+
+    @Test("Data requests use the unit endpoint with its symbol")
+    func prefersUnitEndpoint() {
+        let account = account(unitRestURL: "https://lekcjaplus.vulcan.net.pl/opole/OpoleZSE/api")
+        #expect(
+            HebeClient.dataEndpoint(for: account, fallback: "https://lekcjaplus.vulcan.net.pl/opole/api")
+                == "https://lekcjaplus.vulcan.net.pl/opole/OpoleZSE/api"
+        )
+    }
+
+    @Test("Falls back to the tenant endpoint when the account has no unit URL")
+    func fallsBackToTenantEndpoint() {
+        let account = account(unitRestURL: "   ")
+        #expect(
+            HebeClient.dataEndpoint(for: account, fallback: "https://lekcjaplus.vulcan.net.pl/opole/api")
+                == "https://lekcjaplus.vulcan.net.pl/opole/api"
+        )
+    }
+}
+
 struct FormattingTests {
     @Test("Grade values are formatted for Polish readers")
     func cleanDouble() {
