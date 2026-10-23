@@ -96,6 +96,7 @@ actor PrometheusMailClient: MailService {
     private let initialCookies: [CookieSnapshot]
 
     private var isInitialized = false
+    private var initialization: Task<Void, Error>?
     private var selectedMailbox: Mailbox?
     private var antiForgeryToken = ""
     private var appGuid = ""
@@ -250,6 +251,26 @@ actor PrometheusMailClient: MailService {
 
     private func ensureInitialized() async throws {
         if isInitialized { return }
+        // The UI loads messages and mailboxes together. Two callers entering
+        // this actor before the first `await` would each start a portal login on
+        // the same shared cookie jar and cancel one another (NSURLError -999).
+        if let initialization {
+            try await initialization.value
+            return
+        }
+        let task = Task { try await performInitialization() }
+        initialization = task
+        do {
+            try await task.value
+            isInitialized = true
+            initialization = nil
+        } catch {
+            initialization = nil
+            throw error
+        }
+    }
+
+    private func performInitialization() async throws {
         guard !tenant.isEmpty else {
             throw PrometheusMailError.missingCredentials
         }
@@ -285,8 +306,6 @@ actor PrometheusMailClient: MailService {
             try await signInForCookies()
             try await completeSSO()
         }
-
-        isInitialized = true
     }
 
     private func signInForCookies() async throws {
@@ -442,39 +461,48 @@ actor PrometheusMailClient: MailService {
 
     /// Diary-first handshake (proven by the JS `hebece-prometheusweb` client):
     /// the diary (`Uczeń`) SSO session issues the real `wiadomosciUrl` in its
-    /// `VParam`. Hardcoded `wiadomosci.eduvulcan.pl` guesses break on custom
-    /// domains and skip this session entirely.
+    /// `VParam`. The journal tiles live on the signed-in portal home; the
+    /// `dostep-do-dziennik` marketing page only links there.
     private func diaryWiadomosciURL() async -> URL? {
-        guard let access = URL(string: "https://eduvulcan.pl/dostep-do-dziennik/") else {
-            return nil
-        }
-        do {
-            let page = try await getHTML(access)
-            await trace("sso.diary.access", MailTraceRedaction.safeURL(page.url))
-            guard let journal = Self.diaryLink(in: page.html, relativeTo: page.url) else {
-                await trace("sso.diary.nolink", "head=\(MailTraceRedaction.htmlHead(page.html))")
-                return nil
-            }
-            await trace("sso.diary.journal", MailTraceRedaction.safeURL(journal))
-            var current = try await getHTML(journal)
-            for _ in 0..<2 {
-                guard let form = HTMLForm.hiddenform(in: current.html) ?? HTMLForm.sso(in: current.html) else {
-                    break
+        let sources = [
+            URL(string: "https://eduvulcan.pl/"),
+            URL(string: "https://eduvulcan.pl/dostep-do-dziennik/")
+        ].compactMap { $0 }
+
+        for source in sources {
+            do {
+                let page = try await getHTML(source)
+                await trace("sso.diary.access", MailTraceRedaction.safeURL(page.url))
+                guard let journal = Self.diaryLink(in: page.html, relativeTo: page.url) else {
+                    await trace("sso.diary.nolink", MailTraceRedaction.safeURL(page.url))
+                    continue
                 }
-                current = try await submit(form, relativeTo: current.url)
+                await trace("sso.diary.journal", MailTraceRedaction.safeURL(journal))
+                var current = try await getHTML(journal)
+                var visited = Set<String>()
+                for _ in 0..<2 {
+                    let signature = "\(current.url.absoluteString)|\(current.html.count)"
+                    guard visited.insert(signature).inserted else { break }
+                    guard let form = HTMLForm.hiddenform(in: current.html) ?? HTMLForm.sso(in: current.html) else {
+                        break
+                    }
+                    current = try await submit(form, relativeTo: current.url)
+                }
+                let metadata = MailSessionMetadata.parse(current.html)
+                if let url = metadata.wiadomosciURL {
+                    await trace("sso.diary.wiadomosci", MailTraceRedaction.safeURL(url))
+                    return url
+                }
+                await trace("sso.diary.novparam", "\(MailTraceRedaction.safeURL(current.url)) head=\(MailTraceRedaction.htmlHead(current.html))")
+            } catch {
+                await trace("sso.diary.error", "\(String(describing: error))")
             }
-            let metadata = MailSessionMetadata.parse(current.html)
-            if let url = metadata.wiadomosciURL {
-                await trace("sso.diary.wiadomosci", MailTraceRedaction.safeURL(url))
-                return url
-            }
-            await trace("sso.diary.novparam", "head=\(MailTraceRedaction.htmlHead(current.html))")
-        } catch {
-            await trace("sso.diary.error", "\(String(describing: error))")
         }
         return nil
     }
 
+    /// Only diary hosts count. A link containing the word `dziennik` is usually
+    /// this very page, and following it used to loop back to the marketing site.
     private static func diaryLink(in html: String, relativeTo base: URL) -> URL? {
         guard let regex = try? NSRegularExpression(
             pattern: #"<a\b[^>]*\bhref\s*=\s*"([^"]+)"[^>]*>"#,
@@ -483,7 +511,6 @@ actor PrometheusMailClient: MailService {
             return nil
         }
         let text = html as NSString
-        var fallback: URL?
         for match in regex.matches(in: html, range: NSRange(location: 0, length: text.length)) {
             let href = HTMLEntities.decode(text.substring(with: match.range(at: 1)))
             guard let resolved = URL(string: href, relativeTo: base)?.absoluteURL else { continue }
@@ -491,22 +518,31 @@ actor PrometheusMailClient: MailService {
             if host.hasPrefix("uczen.") {
                 return resolved
             }
-            if fallback == nil, href.lowercased().contains("dziennik") {
-                fallback = resolved
-            }
         }
-        return fallback
+        return nil
     }
 
     private func followSSO(from url: URL) async throws -> (html: String, url: URL) {
         var page = try await getHTML(url)
+        var visited = Set<String>()
         for _ in 0..<10 {
+            let signature = "\(page.url.absoluteString)|\(page.html.count)"
+            guard visited.insert(signature).inserted else {
+                // The same page keeps coming back: the remote side is rejecting
+                // our token and re-issuing a fresh one. Repeating it ten times
+                // only burns requests and hides the cause.
+                await trace(
+                    "sso.loop",
+                    "\(MailTraceRedaction.safeURL(page.url)) bytes=\(page.html.count) cookies=\(cookieNames(hostSuffix: "vulcan.net.pl").joined(separator: ","))"
+                )
+                return page
+            }
             let metadata = MailSessionMetadata.parse(page.html)
             let form = HTMLForm.sso(in: page.html)
             let forms = HTMLForm.forms(in: page.html).count
             await trace(
                 "sso.page",
-                "\(MailTraceRedaction.safeURL(page.url)) forms=\(forms) ssoForm=\(form != nil) tokens=\(metadata.isComplete) bytes=\(page.html.count)"
+                "\(MailTraceRedaction.safeURL(page.url)) forms=\(forms) ssoForm=\(form != nil) name=\(form?.name ?? "-") action=\(form.map { MailTraceRedaction.safeURL($0.url(relativeTo: page.url) ?? page.url) } ?? "-") tokens=\(metadata.isComplete) bytes=\(page.html.count)"
             )
             if mailboxMetadata(from: page) != nil {
                 return page
@@ -518,6 +554,17 @@ actor PrometheusMailClient: MailService {
             page = try await submit(form, relativeTo: page.url)
         }
         return page
+    }
+
+    /// Cookie names currently held for hosts ending in `hostSuffix`. Values are
+    /// never logged; only presence tells us whether URLSession dropped a cookie.
+    private func cookieNames(hostSuffix: String) -> [String] {
+        let storage = session.configuration.httpCookieStorage ?? .shared
+        let name = hostSuffix.lowercased()
+        return (storage.cookies ?? [])
+            .filter { $0.domain.lowercased().contains(name) }
+            .map(\.name)
+            .sorted()
     }
 
     /// The student app also embeds `antiForgeryToken`/`appGuid`; those must not
@@ -552,6 +599,13 @@ actor PrometheusMailClient: MailService {
         request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
         request.setValue("text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", forHTTPHeaderField: "Accept")
         request.setValue("pl-PL,pl;q=0.9,en;q=0.8", forHTTPHeaderField: "Accept-Language")
+        // A form that posts back to the page it came from cannot advance an SSO
+        // handshake; browsers submit WS-Fed forms to the realm host.
+        let selfPost = url.absoluteString == base.absoluteString
+        await trace(
+            "http.post.req",
+            "\(MailTraceRedaction.safeURL(url)) from=\(MailTraceRedaction.safeURL(base)) selfPost=\(selfPost) fields=\(form.fields.map(\.name).joined(separator: ","))\(form.fieldShape)"
+        )
         request.httpBody = form.body
 
         let (data, response) = try await session.data(for: request)
@@ -560,7 +614,7 @@ actor PrometheusMailClient: MailService {
         }
         await trace(
             "http.post",
-            "\(http.statusCode) \(MailTraceRedaction.safeURL(http.url ?? url)) fields=\(form.fields.map(\.name).joined(separator: ",")) bytes=\(data.count)"
+            "\(http.statusCode) -> \(MailTraceRedaction.safeURL(http.url ?? url)) bytes=\(data.count) cookieHosts=\(cookieNames(hostSuffix: url.host ?? "").joined(separator: ","))"
         )
         if http.statusCode == 401 || http.statusCode == 403 {
             throw PrometheusMailError.sessionExpired
@@ -583,7 +637,7 @@ actor PrometheusMailClient: MailService {
         }
         await trace(
             "http.get",
-            "\(http.statusCode) \(MailTraceRedaction.safeURL(http.url ?? url)) bytes=\(data.count)"
+            "\(http.statusCode) \(MailTraceRedaction.safeURL(http.url ?? url)) bytes=\(data.count) cookies=\(cookieNames(hostSuffix: http.url?.host ?? url.host ?? "").joined(separator: ","))"
         )
         if http.statusCode == 401 || http.statusCode == 403 {
             throw PrometheusMailError.sessionExpired

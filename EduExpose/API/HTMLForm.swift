@@ -88,6 +88,17 @@ struct HTMLForm: Sendable {
     var body: Data {
         Data(FormURLEncoding.encode(fields.map { ($0.name, $0.value) }).utf8)
     }
+
+    /// Token-safe shape of the values: lengths only, plus a flag when a value
+    /// already looks percent-encoded (re-encoding it would corrupt the token).
+    var fieldShape: String {
+        let parts = fields.map { field -> String in
+            let value = field.value
+            let encoded = value.contains("%3D") || value.contains("%2F") || value.contains("%2B")
+            return "\(field.name)=\(value.count)\(encoded ? "!pct" : "")"
+        }
+        return " [" + parts.joined(separator: ",") + "]"
+    }
 }
 
 /// `application/x-www-form-urlencoded` encoding.
