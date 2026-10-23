@@ -37,6 +37,28 @@ jobs:
       - name: Generate project
         run: xcodegen generate
 
+      - name: Verify brand assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          ICON=EduExpose/Assets.xcassets/AppIcon.appiconset/app-icon-1024.png
+          LOGO=EduExpose/Assets.xcassets/BrandLogo.imageset/BrandLogo@2x.png
+          test -f "$ICON"
+          test -f "$LOGO"
+          python3 - "$ICON" <<'PY'
+          import struct
+          import sys
+
+          path = sys.argv[1]
+          data = open(path, "rb").read()
+          assert data[:8] == b"\x89PNG\r\n\x1a\n", "app icon is not a PNG"
+          width, height = struct.unpack(">II", data[16:24])
+          assert (width, height) == (1024, 1024), f"app icon is {width}x{height}"
+          colour_type = data[25]
+          assert colour_type == 2, f"app icon has an alpha channel (colour type {colour_type})"
+          print(f"{path}: {width}x{height}, RGB, no alpha")
+          PY
+
       - name: Show toolchain
         run: |
           xcodebuild -version

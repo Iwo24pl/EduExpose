@@ -15,6 +15,9 @@ uruchamia aplikację w symulatorze i publikuje niepodpisane IPA.
 - oceny, średnie i szczegóły ocen
 - plan lekcji z zastępstwami i nawigacją po tygodniach
 - sprawdziany, zadania domowe, uwagi, ogłoszenia i wiadomości
+- skrzynka Prometheus dla kont nie-Hebe, wysyłanie, odpowiedź i przekazywanie
+  wiadomości (na razie bez załączników)
+- ciemny granatowy interfejs zgodny z kolorem ikony aplikacji
 - sprawdzanie aktualizacji przez GitHub Releases
 
 ## Wymagania

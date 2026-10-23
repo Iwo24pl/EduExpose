@@ -147,31 +147,7 @@ struct PrometheusLoginService {
     }
 
     func signIn(login: String, password: String) async throws -> [StoredStudent] {
-        let showCaptcha = await queryUserInfo(login)
-        let html = try await loginPage()
-        if html.contains("Twój adres e-mail nie został jeszcze potwierdzony.") {
-            throw LoginError.emailNotConfirmed
-        }
-
-        guard let csrf = LoginPage.csrfToken(in: html) else {
-            throw LoginError.csrf
-        }
-
-        var captcha = ""
-        let challenge = LoginPage.captcha(in: html)
-        if showCaptcha ?? (challenge != nil) {
-            guard let challenge else {
-                throw LoginError.captcha
-            }
-            captcha = captchaResponse(
-                challenge: challenge.challenge,
-                difficulty: challenge.difficulty,
-                rounds: challenge.rounds
-            )
-        }
-
-        try await postLogin(login: login, password: password, csrf: csrf, captcha: captcha)
-        let apiAp = try await apiApWithConsent()
+        let apiAp = try await authenticate(login: login, password: password)
 
         guard apiAp.success else {
             throw LoginError.api(apiAp.errorMessage ?? "API /api/ap zwróciło błąd.")
@@ -213,6 +189,47 @@ struct PrometheusLoginService {
             throw LoginError.noAccounts
         }
         return result.sorted { $0.account.displayName < $1.account.displayName }
+    }
+
+    /// Re-authenticates against the portal without registering a Hebe device.
+    /// The resulting cookies are handed to `PrometheusMailClient`.
+    func portalCookies(login: String, password: String) async throws -> [CookieSnapshot] {
+        let apiAp = try await authenticate(login: login, password: password)
+        guard apiAp.success else {
+            throw LoginError.api(apiAp.errorMessage ?? "API /api/ap zwróciło błąd.")
+        }
+        let storage = session.configuration.httpCookieStorage ?? .shared
+        return CookieSnapshot.capture(
+            storage.cookies(for: URL(string: base)!) ?? []
+        )
+    }
+
+    private func authenticate(login: String, password: String) async throws -> ApiApResponse {
+        let showCaptcha = await queryUserInfo(login)
+        let html = try await loginPage()
+        if html.contains("Twój adres e-mail nie został jeszcze potwierdzony.") {
+            throw LoginError.emailNotConfirmed
+        }
+
+        guard let csrf = LoginPage.csrfToken(in: html) else {
+            throw LoginError.csrf
+        }
+
+        var captcha = ""
+        let challenge = LoginPage.captcha(in: html)
+        if showCaptcha ?? (challenge != nil) {
+            guard let challenge else {
+                throw LoginError.captcha
+            }
+            captcha = captchaResponse(
+                challenge: challenge.challenge,
+                difficulty: challenge.difficulty,
+                rounds: challenge.rounds
+            )
+        }
+
+        try await postLogin(login: login, password: password, csrf: csrf, captcha: captcha)
+        return try await apiApWithConsent()
     }
 
     // MARK: Portal steps
