@@ -40,6 +40,7 @@ final class AppModel {
     var isAddingAccount = false
     var errorMessage: String?
     var updateInfo: UpdateInfo?
+    var mailTrace: [MailTraceEvent] = []
 
     let session: URLSession
     private var clients: [String: HebeClient] = [:]
@@ -94,6 +95,10 @@ final class AppModel {
                 .signIn(login: login, password: password)
             let portalCookies = CookieSnapshot.capturePortal(
                 HTTPCookieStorage.shared.cookies ?? []
+            )
+            await MailTraceStore.shared.record(
+                "login.cookies",
+                "count=\(portalCookies.count)"
             )
             // A new portal login invalidates cookies held by other accounts.
             mailCookies = [:]
@@ -465,6 +470,17 @@ final class AppModel {
     private func invalidateMailSession() {
         cachedMailService = nil
         mailCookies = [:]
+    }
+
+    // MARK: Diagnostics
+
+    func refreshMailTrace() async {
+        mailTrace = await MailTraceStore.shared.snapshot()
+    }
+
+    func clearMailTrace() async {
+        await MailTraceStore.shared.clear()
+        mailTrace = []
     }
 
     // MARK: Update check

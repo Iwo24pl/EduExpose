@@ -259,6 +259,32 @@ struct CookieSnapshotTests {
     }
 }
 
+struct MailTraceRedactionTests {
+    @Test("Trace URLs keep the path but drop query values")
+    func redactsURLQuery() throws {
+        let url = try #require(
+            URL(string: "https://eduvulcan.pl/logowanie?ReturnUrl=secret&wa=token")
+        )
+        let safe = MailTraceRedaction.safeURL(url)
+
+        #expect(safe.contains("/logowanie"))
+        #expect(!safe.contains("secret"))
+        #expect(!safe.contains("token"))
+        #expect(safe.contains("[ReturnUrl,wa]"))
+    }
+
+    @Test("Trace snippets do not expose session values")
+    func redactsHTMLValues() {
+        let head = MailTraceRedaction.htmlHead(
+            "<script>antiForgeryToken: 'secret-token'; appGuid: 'secret-guid'</script>"
+        )
+
+        #expect(!head.contains("secret-token"))
+        #expect(!head.contains("secret-guid"))
+        #expect(head.contains("<redacted>"))
+    }
+}
+
 struct MailSessionMetadataTests {
     @Test("Reads tokens from the VParam object")
     func readsVParam() throws {

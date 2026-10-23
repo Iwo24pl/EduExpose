@@ -133,6 +133,13 @@ enum LoginPage {
     }
 }
 
+/// A fresh portal session, including the URL the browser would follow after
+/// the login POST. That redirect is what establishes the mailbox SSO session.
+struct PortalSession: Sendable {
+    let cookies: [CookieSnapshot]
+    let postLoginURL: URL?
+}
+
 /// Signs in through the eduVULCAN web portal and registers Hebe CE devices.
 struct PrometheusLoginService {
     let session: URLSession
@@ -147,7 +154,8 @@ struct PrometheusLoginService {
     }
 
     func signIn(login: String, password: String) async throws -> [StoredStudent] {
-        let apiAp = try await authenticate(login: login, password: password)
+        let result = try await authenticate(login: login, password: password)
+        let apiAp = result.response
 
         guard apiAp.success else {
             throw LoginError.api(apiAp.errorMessage ?? "API /api/ap zwróciło błąd.")
@@ -192,19 +200,40 @@ struct PrometheusLoginService {
     }
 
     /// Re-authenticates against the portal without registering a Hebe device.
-    /// The resulting cookies are handed to `PrometheusMailClient`.
-    func portalCookies(login: String, password: String) async throws -> [CookieSnapshot] {
-        let apiAp = try await authenticate(login: login, password: password)
-        guard apiAp.success else {
-            throw LoginError.api(apiAp.errorMessage ?? "API /api/ap zwróciło błąd.")
+    /// Pass the exact login URL reached by the mailbox redirect chain: it
+    /// carries the `ReturnUrl` that establishes the mailbox SSO session.
+    func portalCookies(
+        login: String,
+        password: String,
+        loginURL: URL? = nil
+    ) async throws -> PortalSession {
+        let result = try await authenticate(
+            login: login,
+            password: password,
+            portalLoginURL: loginURL
+        )
+        guard result.response.success else {
+            throw LoginError.api(result.response.errorMessage ?? "API /api/ap zwróciło błąd.")
         }
         let storage = session.configuration.httpCookieStorage ?? .shared
-        return CookieSnapshot.capturePortal(storage.cookies ?? [])
+        return PortalSession(
+            cookies: CookieSnapshot.capturePortal(storage.cookies ?? []),
+            postLoginURL: result.postLoginURL
+        )
     }
 
-    private func authenticate(login: String, password: String) async throws -> ApiApResponse {
+    private func authenticate(
+        login: String,
+        password: String,
+        portalLoginURL: URL? = nil
+    ) async throws -> (response: ApiApResponse, postLoginURL: URL?) {
+        let loginURL = try portalLoginURL ?? makeLoginURL(returnPath: nil)
         let showCaptcha = await queryUserInfo(login)
-        let html = try await loginPage()
+        let html = try await loginPage(url: loginURL)
+        await MailTraceStore.shared.record(
+            "login.page",
+            "\(MailTraceRedaction.safeURL(loginURL)) csrf=\(LoginPage.csrfToken(in: html) != nil)"
+        )
         if html.contains("Twój adres e-mail nie został jeszcze potwierdzony.") {
             throw LoginError.emailNotConfirmed
         }
@@ -226,8 +255,50 @@ struct PrometheusLoginService {
             )
         }
 
-        try await postLogin(login: login, password: password, csrf: csrf, captcha: captcha)
-        return try await apiApWithConsent()
+        let postLoginURL = try await postLogin(
+            login: login,
+            password: password,
+            csrf: csrf,
+            captcha: captcha,
+            at: loginURL
+        )
+        // A browser follows Location immediately. This is what completes the
+        // authenticated return chain (and, for the mailbox, the SSO handshake).
+        if let postLoginURL {
+            await MailTraceStore.shared.record(
+                "login.location",
+                MailTraceRedaction.safeURL(postLoginURL)
+            )
+            var follow = URLRequest(url: postLoginURL)
+            follow.setValue(userAgent, forHTTPHeaderField: "User-Agent")
+            follow.setValue(acceptHTML, forHTTPHeaderField: "Accept")
+            follow.setValue(acceptLanguage, forHTTPHeaderField: "Accept-Language")
+            follow.setValue(loginURL.absoluteString, forHTTPHeaderField: "Referer")
+            if let (_, response) = try? await session.data(for: follow) {
+                let finalURL = (response as? HTTPURLResponse)?.url
+                await MailTraceStore.shared.record(
+                    "login.follow",
+                    finalURL.map(MailTraceRedaction.safeURL) ?? "-"
+                )
+            } else {
+                await MailTraceStore.shared.record("login.follow", "failed")
+            }
+        }
+        let apiAp = try await apiApWithConsent()
+        return (apiAp, postLoginURL)
+    }
+
+    private func makeLoginURL(returnPath: String?) throws -> URL {
+        guard var components = URLComponents(string: base + "/logowanie") else {
+            throw LoginError.api("Nieprawidłowy adres logowania.")
+        }
+        if let returnPath, !returnPath.isEmpty {
+            components.queryItems = [URLQueryItem(name: "ReturnUrl", value: returnPath)]
+        }
+        guard let url = components.url else {
+            throw LoginError.api("Nieprawidłowy adres logowania.")
+        }
+        return url
     }
 
     // MARK: Portal steps
@@ -258,7 +329,7 @@ struct PrometheusLoginService {
     }
 
     /// Fetches the login page with a clean portal session, retrying once when the form is missing.
-    private func loginPage() async throws -> String {
+    private func loginPage(url: URL) async throws -> String {
         clearPortalCookies()
         var lastError: Error?
         var sawPage = false
@@ -269,7 +340,7 @@ struct PrometheusLoginService {
                 await visitHomePage()
             }
             do {
-                let (html, response) = try await fetchLoginPage()
+                let (html, response) = try await fetchLoginPage(url)
                 lastError = nil
                 sawPage = true
                 if LoginPage.csrfToken(in: html) != nil
@@ -291,10 +362,7 @@ struct PrometheusLoginService {
         throw LoginError.csrf
     }
 
-    private func fetchLoginPage() async throws -> (String, URLResponse) {
-        guard let url = URL(string: base + "/logowanie") else {
-            throw LoginError.api("Nieprawidłowy adres logowania.")
-        }
+    private func fetchLoginPage(_ url: URL) async throws -> (String, URLResponse) {
         var request = URLRequest(url: url)
         request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
         request.setValue(acceptHTML, forHTTPHeaderField: "Accept")
@@ -313,18 +381,20 @@ struct PrometheusLoginService {
         _ = try? await session.data(for: request)
     }
 
-    private func postLogin(login: String, password: String, csrf: String, captcha: String) async throws {
-        guard let url = URL(string: base + "/logowanie") else {
-            throw LoginError.api("Nieprawidłowy adres logowania.")
-        }
-
+    private func postLogin(
+        login: String,
+        password: String,
+        csrf: String,
+        captcha: String,
+        at url: URL
+    ) async throws -> URL? {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
         request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
         request.setValue(acceptHTML, forHTTPHeaderField: "Accept")
         request.setValue(acceptLanguage, forHTTPHeaderField: "Accept-Language")
-        request.setValue(base + "/logowanie", forHTTPHeaderField: "Referer")
+        request.setValue(url.absoluteString, forHTTPHeaderField: "Referer")
         request.setValue(base, forHTTPHeaderField: "Origin")
         request.httpBody = formBody([
             ("UserName", login),
@@ -345,8 +415,9 @@ struct PrometheusLoginService {
         if http.statusCode >= 500 {
             throw LoginError.api("Serwer logowania zwrócił błąd \(http.statusCode). Spróbuj ponownie.")
         }
-        if http.value(forHTTPHeaderField: "Location") != nil {
-            return
+        if let location = http.value(forHTTPHeaderField: "Location"),
+           let next = URL(string: location, relativeTo: url)?.absoluteURL {
+            return next
         }
         if LoginPage.isCaptchaRejection(body) {
             throw LoginError.captcha
@@ -491,7 +562,7 @@ struct PrometheusLoginService {
     }
 }
 
-private final class NoRedirectDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+final class NoRedirectDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
     func urlSession(
         _ session: URLSession,
         task: URLSessionTask,

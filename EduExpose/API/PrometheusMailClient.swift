@@ -99,8 +99,8 @@ actor PrometheusMailClient: MailService {
     private var antiForgeryToken = ""
     private var appGuid = ""
     private var apiBase: URL?
+    private var postLoginURL: URL?
 
-    private let portalBase = URL(string: "https://eduvulcan.pl")!
     private let ssoBase = URL(string: "https://dziennik-logowanie.vulcan.net.pl")!
     private let messagesBase = URL(string: "https://wiadomosci.eduvulcan.pl")!
     private let userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36"
@@ -254,13 +254,18 @@ actor PrometheusMailClient: MailService {
         }
 
         let usedStoredCookies = !initialCookies.isEmpty
+        await trace("init", "tenant=\(tenant) storedCookies=\(usedStoredCookies)")
         if usedStoredCookies {
             seedCookies(initialCookies, clearAll: true)
+            await trace(
+                "cookies.stored",
+                initialCookies.map { "\($0.name)@\($0.domain)" }.joined(separator: ",")
+            )
         } else {
             guard !login.isEmpty, !password.isEmpty else {
                 throw PrometheusMailError.missingCredentials
             }
-            try await signInForCookies(clearAll: false)
+            try await signInForCookies()
         }
 
         do {
@@ -275,36 +280,109 @@ actor PrometheusMailClient: MailService {
             }
             // Cookies captured after logging in can expire while the app is
             // open; authenticate once more before giving up.
-            try await signInForCookies(clearAll: true)
+            await trace("init.retry", "session expired with stored cookies")
+            try await signInForCookies()
             try await completeSSO()
         }
 
         isInitialized = true
     }
 
-    private func signInForCookies(clearAll: Bool) async throws {
+    private func signInForCookies() async throws {
+        await trace("login.start", "clearing portal and SSO cookies")
+        // Start from a clean jar so the portal chain belongs to this account,
+        // not to whatever account last used the shared cookie storage.
         let storage = session.configuration.httpCookieStorage ?? .shared
-        var hosts = [
+        clearCookies(storage, hosts: [
+            "eduvulcan.pl",
             "uczen.eduvulcan.pl",
             "dziennik-logowanie.vulcan.net.pl",
             "wiadomosci.eduvulcan.pl"
-        ]
-        if clearAll {
-            hosts.insert("eduvulcan.pl", at: 0)
-        }
-        clearCookies(storage, hosts: hosts)
+        ])
 
-        let cookies: [CookieSnapshot]
+        // Follow the mailbox -> STS -> portal chain with redirects disabled to
+        // discover the exact login URL (including its ReturnUrl). Reconstructing
+        // that URL by hand gets the double encoding wrong.
+        let loginURL: URL?
+        switch await discoverLoginURL() {
+        case .needed(let url):
+            loginURL = url
+            await trace("login.discovery", "login \(MailTraceRedaction.safeURL(url))")
+        case .alreadySignedIn:
+            await trace("login.discovery", "already signed in")
+            return
+        case .failed:
+            await trace("login.discovery", "failed; using plain login page")
+            loginURL = nil
+        }
+
+        let portal: PortalSession
         do {
-            cookies = try await PrometheusLoginService(session: session)
-                .portalCookies(login: login, password: password)
+            portal = try await PrometheusLoginService(session: session)
+                .portalCookies(
+                    login: login,
+                    password: password,
+                    loginURL: loginURL
+                )
         } catch {
+            await trace("login.error", "\(String(describing: error))")
             throw PrometheusMailError.loginFailed
         }
-        guard !cookies.isEmpty else {
+        guard !portal.cookies.isEmpty else {
+            await trace("login.error", "no portal cookies")
             throw PrometheusMailError.loginFailed
         }
-        seedCookies(cookies, clearAll: false)
+        await trace(
+            "login.ok",
+            "cookies=\(portal.cookies.count) names=\(portal.cookies.map { "\($0.name)@\($0.domain)" }.joined(separator: ",")) postLogin=\(portal.postLoginURL.map(MailTraceRedaction.safeURL) ?? "-")"
+        )
+        postLoginURL = portal.postLoginURL
+        seedCookies(portal.cookies, clearAll: false)
+    }
+
+    private enum LoginDiscovery {
+        case needed(URL)
+        case alreadySignedIn
+        case failed
+    }
+
+    /// Records one redacted step for the settings diagnostics.
+    private func trace(_ stage: String, _ detail: String) async {
+        await MailTraceStore.shared.record(stage, detail)
+    }
+
+    private func discoverLoginURL() async -> LoginDiscovery {
+        var request = URLRequest(url: appURL)
+        request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue(
+            "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            forHTTPHeaderField: "Accept"
+        )
+        request.setValue("pl-PL,pl;q=0.9,en;q=0.8", forHTTPHeaderField: "Accept-Language")
+        request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
+
+        // Let URLSession follow the chain so cookies are processed exactly as
+        // in a browser. Its final URL is the login page carrying ReturnUrl.
+        guard let (_, response) = try? await session.data(for: request),
+              let http = response as? HTTPURLResponse,
+              let finalURL = http.url else {
+            return .failed
+        }
+
+        let host = finalURL.host?.lowercased() ?? ""
+        let path = finalURL.path.lowercased()
+        await trace(
+            "discovery.final",
+            "\(http.statusCode) \(MailTraceRedaction.safeURL(finalURL))"
+        )
+
+        if path.contains("logowanie") {
+            return .needed(finalURL)
+        }
+        if host.contains("wiadomosci") && !path.contains("login") {
+            return .alreadySignedIn
+        }
+        return .failed
     }
 
     /// Follows the WS-Federation handshake instead of assuming a fixed number
@@ -313,29 +391,53 @@ actor PrometheusMailClient: MailService {
     private func completeSSO() async throws {
         // The mailbox redirects through the portal by itself. The explicit SSO
         // entry points remain as a fallback for older accounts.
+        var entries = [appURL]
+        if let postLoginURL {
+            entries.append(postLoginURL)
+        }
+        entries.append(secondAuthURL)
+        entries.append(appURL)
+
         var lastError = PrometheusMailError.sessionExpired
-        for url in [appURL, firstAuthURL, secondAuthURL, appURL] {
+        var seen = Set<String>()
+        for url in entries {
+            guard seen.insert(url.absoluteString).inserted else { continue }
+            await trace("sso.entry", MailTraceRedaction.safeURL(url))
             do {
                 let page = try await followSSO(from: url)
                 if let metadata = mailboxMetadata(from: page) {
                     apply(metadata)
+                    await trace(
+                        "metadata.ok",
+                        "api=\(metadata.apiURL.map(MailTraceRedaction.safeURL) ?? "-")"
+                    )
                     return
                 }
             } catch let error as PrometheusMailError {
                 // A rejected entry point should not prevent trying the next one.
                 lastError = error
+                await trace("sso.entry.error", "\(String(describing: error))")
             }
         }
+        await trace("sso.failed", "\(String(describing: lastError))")
         throw lastError
     }
 
     private func followSSO(from url: URL) async throws -> (html: String, url: URL) {
         var page = try await getHTML(url)
         for _ in 0..<10 {
+            let metadata = MailSessionMetadata.parse(page.html)
+            let form = HTMLForm.sso(in: page.html)
+            let forms = HTMLForm.forms(in: page.html).count
+            await trace(
+                "sso.page",
+                "\(MailTraceRedaction.safeURL(page.url)) forms=\(forms) ssoForm=\(form != nil) tokens=\(metadata.isComplete) bytes=\(page.html.count)"
+            )
             if mailboxMetadata(from: page) != nil {
                 return page
             }
-            guard let form = HTMLForm.sso(in: page.html) else {
+            guard let form else {
+                await trace("sso.stop", "head=\(MailTraceRedaction.htmlHead(page.html))")
                 return page
             }
             page = try await submit(form, relativeTo: page.url)
@@ -381,6 +483,10 @@ actor PrometheusMailClient: MailService {
         guard let http = response as? HTTPURLResponse else {
             throw PrometheusMailError.invalidResponse
         }
+        await trace(
+            "http.post",
+            "\(http.statusCode) \(MailTraceRedaction.safeURL(http.url ?? url)) fields=\(form.fields.map(\.name).joined(separator: ",")) bytes=\(data.count)"
+        )
         if http.statusCode == 401 || http.statusCode == 403 {
             throw PrometheusMailError.sessionExpired
         }
@@ -400,6 +506,10 @@ actor PrometheusMailClient: MailService {
         guard let http = response as? HTTPURLResponse else {
             throw PrometheusMailError.invalidResponse
         }
+        await trace(
+            "http.get",
+            "\(http.statusCode) \(MailTraceRedaction.safeURL(http.url ?? url)) bytes=\(data.count)"
+        )
         if http.statusCode == 401 || http.statusCode == 403 {
             throw PrometheusMailError.sessionExpired
         }
@@ -491,6 +601,10 @@ actor PrometheusMailClient: MailService {
         guard let http = response as? HTTPURLResponse else {
             throw PrometheusMailError.invalidResponse
         }
+        await trace(
+            "api",
+            "\(method) \(endpoint) \(http.statusCode) bytes=\(data.count)"
+        )
         if http.statusCode == 401 || http.statusCode == 403 {
             throw PrometheusMailError.sessionExpired
         }
@@ -513,15 +627,17 @@ actor PrometheusMailClient: MailService {
 
     private func seedCookies(_ snapshots: [CookieSnapshot], clearAll: Bool) {
         let storage = session.configuration.httpCookieStorage ?? .shared
-        var hosts = [
-            "uczen.eduvulcan.pl",
-            "dziennik-logowanie.vulcan.net.pl",
-            "wiadomosci.eduvulcan.pl"
-        ]
         if clearAll {
-            hosts.insert("eduvulcan.pl", at: 0)
+            // A fresh portal login clears its own host before logging in, and
+            // its post-login redirect sets the SSO/mailbox cookies. Do not clear
+            // those here or the handshake is thrown away.
+            clearCookies(storage, hosts: [
+                "eduvulcan.pl",
+                "uczen.eduvulcan.pl",
+                "dziennik-logowanie.vulcan.net.pl",
+                "wiadomosci.eduvulcan.pl"
+            ])
         }
-        clearCookies(storage, hosts: hosts)
 
         for snapshot in snapshots {
             if let cookie = snapshot.cookie {
@@ -543,14 +659,7 @@ actor PrometheusMailClient: MailService {
 
     // MARK: URLs
 
-    private var firstAuthURL: URL {
-        let prometheus = Self.encode("https://eduvulcan.pl")
-        let sso = Self.encode("https://dziennik-logowanie.vulcan.net.pl")
-        let student = Self.encode("https://uczen.eduvulcan.pl")
-        let raw = "https://eduvulcan.pl/fs/ls?wa=wsignin1.0&wtrealm=\(sso)%2F\(tenant)%2FFs%2FLs%3Fwa%3Dwsignin1.0%26wtrealm%3D\(student)%2F\(tenant)%2FAccount%2FLogin%3FreturnUrl%3D\(prometheus)%26wctx%3Dauth%3DstudentEV%26nslo%3D1&wctx=nslo%3D1"
-        return URL(string: raw) ?? portalBase
-    }
-
+    /// Direct STS fallback for accounts whose portal chain is unavailable.
     private var secondAuthURL: URL {
         let raw = "https://dziennik-logowanie.vulcan.net.pl/\(tenant)/Fs/Ls?wa=wsignin1.0&wtrealm=https://wiadomosci.eduvulcan.pl/\(tenant)/Account/Login?returnUrl=/\(tenant)/App&wctx=auth=studentEV&nslo=1"
         return URL(string: raw) ?? ssoBase
@@ -558,12 +667,6 @@ actor PrometheusMailClient: MailService {
 
     private var appURL: URL {
         URL(string: "https://wiadomosci.eduvulcan.pl/\(tenant)/App") ?? messagesBase
-    }
-
-    private static func encode(_ value: String) -> String {
-        var allowed = CharacterSet.alphanumerics
-        allowed.insert(charactersIn: "-._~")
-        return value.addingPercentEncoding(withAllowedCharacters: allowed) ?? value
     }
 
     private static func absoluteURL(_ raw: String) -> URL? {

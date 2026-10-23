@@ -1,10 +1,12 @@
 import SwiftUI
+import UIKit
 
 struct SettingsView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
 
     @State private var isCheckingUpdate = false
+    @State private var showMailTrace = false
 
     var body: some View {
         NavigationStack {
@@ -22,6 +24,7 @@ struct SettingsView: View {
                         studentSection
                         addAccountButton
                         updateSection
+                        diagnosticsSection
                         sessionSection
                         aboutSection
                     }
@@ -40,6 +43,9 @@ struct SettingsView: View {
             }
         }
         .presentationDetents([.large])
+        .sheet(isPresented: $showMailTrace) {
+            MailTraceView(events: model.mailTrace)
+        }
     }
 
     // MARK: Account
@@ -238,6 +244,40 @@ struct SettingsView: View {
         }
     }
 
+    // MARK: Diagnostics
+
+    private var diagnosticsSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            SectionTitle(title: "Diagnostyka")
+
+            GlassCard {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Jeśli wiadomości się nie ładują, pokaż i skopiuj dziennik. Zawiera adresy, statusy i nazwy ciasteczek, ale nie hasło ani wartości tokenów.")
+                        .font(.footnote)
+                        .foregroundStyle(Palette.onSurfaceVariant)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    HStack(spacing: 10) {
+                        Button("Pokaż dziennik") {
+                            Task {
+                                await model.refreshMailTrace()
+                                showMailTrace = true
+                            }
+                        }
+                        .buttonStyle(.glass)
+                        .tint(Palette.primary)
+
+                        Button("Wyczyść") {
+                            Task { await model.clearMailTrace() }
+                        }
+                        .buttonStyle(.glass)
+                        .tint(Palette.error)
+                    }
+                }
+            }
+        }
+    }
+
     // MARK: Session and about
 
     private var sessionSection: some View {
@@ -282,5 +322,47 @@ struct SettingsView: View {
 
     private var version: String {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0"
+    }
+}
+
+private struct MailTraceView: View {
+    @Environment(\.dismiss) private var dismiss
+    let events: [MailTraceEvent]
+    @State private var copied = false
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                Text(text)
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(Palette.onSurface)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(20)
+            }
+            .background(ScreenBackground())
+            .navigationTitle("Dziennik poczty")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Zamknij") { dismiss() }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        UIPasteboard.general.string = text
+                        copied = true
+                    } label: {
+                        Label(copied ? "Skopiowano" : "Kopiuj", systemImage: "doc.on.doc")
+                    }
+                }
+            }
+        }
+        .presentationDetents([.large])
+    }
+
+    private var text: String {
+        events.isEmpty
+            ? "Brak wpisów. Otwórz Wiadomości i spróbuj ponownie."
+            : events.map(\.dumpLine).joined(separator: "\n\n")
     }
 }
