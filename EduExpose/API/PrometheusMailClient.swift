@@ -567,6 +567,14 @@ actor PrometheusMailClient: MailService {
             .sorted()
     }
 
+    /// Value of a query parameter, already percent-decoded once by URLComponents.
+    private static func queryValue(_ name: String, in url: URL) -> String? {
+        URLComponents(url: url, resolvingAgainstBaseURL: false)?
+            .queryItems?
+            .first { $0.name.caseInsensitiveCompare(name) == .orderedSame }?
+            .value
+    }
+
     /// The student app also embeds `antiForgeryToken`/`appGuid`; those must not
     /// be mistaken for the mailbox session, so require a mailbox host or apiUrl.
     private func mailboxMetadata(from page: (html: String, url: URL)) -> MailSessionMetadata? {
@@ -590,8 +598,25 @@ actor PrometheusMailClient: MailService {
     }
 
     private func submit(_ form: HTMLForm, relativeTo base: URL) async throws -> (html: String, url: URL) {
-        guard let url = form.url(relativeTo: base) else {
+        guard var url = form.url(relativeTo: base) else {
             throw PrometheusMailError.invalidResponse
+        }
+        // A WS-Fed sign-in response belongs to the realm named in `wtrealm`, not
+        // to the page that rendered it. When the form action points back at the
+        // same endpoint, post the token to that realm, which is what the
+        // browser's auto-submit does (the action is usually exactly this URL).
+        let postsToRenderer = url.host?.lowercased() == base.host?.lowercased()
+            && url.path == base.path
+        if postsToRenderer,
+           form.fields.contains(where: { $0.name == "wresult" }),
+           let realm = Self.queryValue("wtrealm", in: base),
+           let realmURL = URL(string: realm),
+           realmURL.host?.lowercased() != base.host?.lowercased() {
+            await trace(
+                "sso.retarget",
+                "\(MailTraceRedaction.safeURL(base)) -> \(MailTraceRedaction.safeURL(realmURL))"
+            )
+            url = realmURL
         }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
