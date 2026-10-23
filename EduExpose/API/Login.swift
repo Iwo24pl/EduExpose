@@ -154,8 +154,8 @@ struct PrometheusLoginService {
     }
 
     func signIn(login: String, password: String) async throws -> [StoredStudent] {
-        let result = try await authenticate(login: login, password: password)
-        let apiAp = result.response
+        let authentication = try await authenticate(login: login, password: password)
+        let apiAp = authentication.response
 
         guard apiAp.success else {
             throw LoginError.api(apiAp.errorMessage ?? "API /api/ap zwróciło błąd.")
