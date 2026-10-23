@@ -107,7 +107,8 @@ struct VulcanMailboxName: Equatable, Sendable {
             return String(input[range])
         }
 
-        guard let name = group(1)?.trimmingCharacters(in: .whitespacesAndNewlines) else {
+        guard let name = group(1)?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !name.isEmpty else {
             return nil
         }
 
@@ -139,8 +140,22 @@ struct VulcanMailboxName: Equatable, Sendable {
         let last = surname.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !first.isEmpty, !last.isEmpty else { return false }
         let haystack = studentName ?? name
-        return haystack.range(of: first, options: .caseInsensitive) != nil
-            && haystack.range(of: last, options: .caseInsensitive) != nil
+        return Self.containsWord(first, in: haystack)
+            && Self.containsWord(last, in: haystack)
+    }
+
+    /// Checks a whole word so `Jan` does not match `Janina`.
+    static func containsWord(_ word: String, in text: String) -> Bool {
+        let needle = word.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !needle.isEmpty else { return false }
+        return text
+            .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
+            .contains {
+                String($0).compare(
+                    needle,
+                    options: [.caseInsensitive, .diacriticInsensitive]
+                ) == .orderedSame
+            }
     }
 }
 

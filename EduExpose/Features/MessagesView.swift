@@ -5,12 +5,26 @@ struct MessagesView: View {
     @State private var kind: MessageKind = .received
     @State private var messages: [MailMessage] = []
     @State private var locallyRead: Set<String> = []
-    @State private var selectedMessage: MailMessage?
-    @State private var compose: ComposeContext?
+    @State private var sheet: MessageSheet?
     @State private var mailboxes: [Mailbox] = []
     @State private var canSend = false
     @State private var isLoading = false
     @State private var error: String?
+    @State private var loadGeneration = 0
+
+    /// One presentation slot: two `.sheet` modifiers on the same view only
+    /// present reliably on some iOS versions.
+    private enum MessageSheet: Identifiable {
+        case detail(MailMessage)
+        case compose(ComposeContext)
+
+        var id: String {
+            switch self {
+            case .detail(let message): return "detail-\(message.id)"
+            case .compose(let context): return "compose-\(context.id.uuidString)"
+            }
+        }
+    }
 
     var body: some View {
         NavigationStack {
@@ -62,7 +76,12 @@ struct MessagesView: View {
             }
             .refreshable { await load() }
             .task(id: model.activeID) {
+                // Never show the previous pupil's mail while the new one loads.
+                messages = []
+                locallyRead = []
+                error = nil
                 await loadCapabilities()
+                guard !Task.isCancelled else { return }
                 await load()
             }
             .onChange(of: kind) { _, _ in
@@ -70,16 +89,19 @@ struct MessagesView: View {
                 error = nil
                 Task { await load() }
             }
-            .sheet(item: $selectedMessage) { message in
-                MessageDetailView(
-                    message: message,
-                    kind: kind,
-                    mailboxes: mailboxes,
-                    canSend: canSend
-                )
-            }
-            .sheet(item: $compose) { context in
-                ComposeMessageView(context: context, mailboxes: mailboxes)
+            .sheet(item: $sheet, onDismiss: { Task { await load() } }) { item in
+                switch item {
+                case .detail(let message):
+                    MessageDetailView(
+                        message: message,
+                        kind: kind,
+                        mailboxes: mailboxes,
+                        canSend: canSend,
+                        onRead: { id in _ = locallyRead.insert(id) }
+                    )
+                case .compose(let context):
+                    ComposeMessageView(context: context, mailboxes: mailboxes)
+                }
             }
         }
     }
@@ -96,8 +118,7 @@ struct MessagesView: View {
         VStack(spacing: 10) {
             ForEach(messages) { message in
                 Button {
-                    locallyRead.insert(message.id)
-                    selectedMessage = message
+                    sheet = .detail(message)
                 } label: {
                     messageRow(message)
                 }
@@ -169,24 +190,32 @@ struct MessagesView: View {
             error = "Nie udało się pobrać listy skrzynek."
             return
         }
-        compose = ComposeContext(
+        sheet = .compose(ComposeContext(
             mode: .new,
             original: nil,
             recipients: [],
             subject: "",
             body: ""
-        )
+        ))
     }
 
     private func load() async {
+        loadGeneration += 1
+        let generation = loadGeneration
+        let requestedKind = kind
         isLoading = true
         error = nil
         do {
-            messages = try await model.loadMessages(kind: kind)
+            let loaded = try await model.loadMessages(kind: requestedKind)
+            guard generation == loadGeneration, requestedKind == kind else { return }
+            messages = loaded
         } catch {
+            guard generation == loadGeneration, requestedKind == kind else { return }
             self.error = AppModel.describe(error)
         }
-        isLoading = false
+        if generation == loadGeneration {
+            isLoading = false
+        }
     }
 }
 
@@ -199,6 +228,7 @@ private struct MessageDetailView: View {
     let kind: MessageKind
     let mailboxes: [Mailbox]
     let canSend: Bool
+    let onRead: (String) -> Void
 
     @State private var detail: MailMessageDetail?
     @State private var compose: ComposeContext?
@@ -316,6 +346,8 @@ private struct MessageDetailView: View {
             detail = try await model.loadMessageDetail(id: message.id)
             if kind == .received && message.isUnread {
                 await model.markRead(id: message.id)
+                // Only hide the unread dot once the message was opened.
+                onRead(message.id)
             }
         } catch {
             self.error = AppModel.describe(error)
@@ -387,13 +419,45 @@ private struct MessageDetailView: View {
         return result
     }
 
+    /// Recipient names come from the server, so only resolve a mailbox when the
+    /// match is exact or unambiguous. Guessing here sends mail to the wrong person.
     private func matchingMailbox(_ name: String) -> Mailbox? {
         let target = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !target.isEmpty else { return nil }
-        return mailboxes.first { box in
-            box.name.localizedCaseInsensitiveContains(target)
-                || box.displayName.localizedCaseInsensitiveContains(target)
-                || target.localizedCaseInsensitiveContains(box.displayName)
+
+        let options: String.CompareOptions = [.caseInsensitive, .diacriticInsensitive]
+        if let exact = mailboxes.first(where: {
+            $0.displayName.compare(target, options: options) == .orderedSame
+                || $0.name.compare(target, options: options) == .orderedSame
+        }) {
+            return exact
+        }
+
+        let candidates = mailboxes.filter { box in
+            let display = box.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !display.isEmpty else { return false }
+            return Self.wordsContained(display, in: target)
+                || Self.wordsContained(target, in: display)
+        }
+        return candidates.count == 1 ? candidates[0] : nil
+    }
+
+    /// True when every word of `needle` appears as a whole word in `haystack`.
+    private static func wordsContained(_ needle: String, in haystack: String) -> Bool {
+        let words = haystack
+            .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
+            .map(String.init)
+        let needles = needle
+            .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
+            .map(String.init)
+        guard !needles.isEmpty, !words.isEmpty else { return false }
+        return needles.allSatisfy { word in
+            words.contains {
+                $0.compare(
+                    word,
+                    options: [.caseInsensitive, .diacriticInsensitive]
+                ) == .orderedSame
+            }
         }
     }
 

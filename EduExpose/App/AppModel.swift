@@ -389,7 +389,7 @@ final class AppModel {
         do {
             return try await service.messages(kind: kind)
         } catch {
-            invalidateMailSession()
+            invalidateMailSession(for: error)
             throw error
         }
     }
@@ -399,7 +399,7 @@ final class AppModel {
         do {
             return try await service.detail(id: id)
         } catch {
-            invalidateMailSession()
+            invalidateMailSession(for: error)
             throw error
         }
     }
@@ -409,7 +409,7 @@ final class AppModel {
         do {
             return try await service.mailboxes()
         } catch {
-            invalidateMailSession()
+            invalidateMailSession(for: error)
             throw error
         }
     }
@@ -419,7 +419,8 @@ final class AppModel {
             try await currentMailService().markRead(id: id)
         } catch {
             // Messages are readable offline; a failed read receipt is not fatal.
-            invalidateMailSession()
+            // Only discard the session when it has actually expired.
+            invalidateMailSession(for: error)
         }
     }
 
@@ -445,8 +446,21 @@ final class AppModel {
                 try await service.forward(draft, from: originalID)
             }
         } catch {
-            invalidateMailSession()
+            invalidateMailSession(for: error)
             throw error
+        }
+    }
+
+    /// Clears the cached mailbox session. Transient failures (network, a
+    /// rejected send, a failed read receipt) must not throw away cookies for
+    /// every account and force another full portal login.
+    private func invalidateMailSession(for error: Error) {
+        guard let mailError = error as? PrometheusMailError else { return }
+        switch mailError {
+        case .sessionExpired, .loginFailed:
+            invalidateMailSession()
+        case .missingCredentials, .noMailbox, .invalidResponse, .server:
+            break
         }
     }
 

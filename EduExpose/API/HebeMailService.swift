@@ -76,16 +76,26 @@ actor HebeMailService: MailService {
         if let cached = cache[id] {
             return cached
         }
+        // A message only lives in one mailbox, so a failure in another one
+        // must not hide a match we could still find.
+        var lastError: Error?
         for kind in MessageKind.allCases {
-            let messages = try await client.messages(box: box, pupilId: pupilID, kind: kind)
-            for message in messages {
-                cache[message.globalKey] = message
+            do {
+                let messages = try await client.messages(box: box, pupilId: pupilID, kind: kind)
+                for message in messages {
+                    cache[message.globalKey] = message
+                }
+            } catch {
+                lastError = error
             }
         }
-        guard let message = cache[id] else {
-            throw VulcanError.message("Nie znaleziono wiadomości.")
+        if let message = cache[id] {
+            return message
         }
-        return message
+        if let lastError {
+            throw lastError
+        }
+        throw VulcanError.message("Nie znaleziono wiadomości.")
     }
 
     private func correspondent(for message: Message, kind: MessageKind) -> String {
@@ -103,8 +113,20 @@ actor HebeMailService: MailService {
             MailAttachment(
                 id: "\(message.globalKey)-\(index)",
                 name: attachment.name,
-                url: attachment.link.flatMap { URL(string: $0) }
+                url: Self.webURL(attachment.link)
             )
         }
+    }
+
+    /// Relative or non-web links cannot be opened from the attachment row.
+    private static func webURL(_ raw: String?) -> URL? {
+        guard let raw = raw?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !raw.isEmpty,
+              let url = URL(string: raw),
+              let scheme = url.scheme?.lowercased(),
+              scheme == "https" || scheme == "http" else {
+            return nil
+        }
+        return url
     }
 }

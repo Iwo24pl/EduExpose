@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import EduExpose
 
@@ -39,6 +40,16 @@ struct VulcanMailboxNameTests {
     @Test("Rejects an unrecognised mailbox name")
     func rejectsUnknownFormat() {
         #expect(VulcanMailboxName.parse("Skrzynka") == nil)
+        #expect(VulcanMailboxName.parse(" - O - (SP 1)") == nil)
+    }
+
+    @Test("Does not match a pupil whose name only shares a prefix")
+    func doesNotMatchNamePrefix() throws {
+        let parsed = try #require(
+            VulcanMailboxName.parse("SP 1 - O - Janina Kowalska - (SP 1)")
+        )
+
+        #expect(!parsed.matches(firstName: "Jan", surname: "Kowalski"))
     }
 }
 
@@ -55,6 +66,21 @@ struct MailTextTests {
     @Test("Decodes common HTML entities")
     func decodesEntities() {
         #expect(MailText.plainText(from: "A &amp; B &lt; C &gt; D &quot;E&quot;") == "A & B < C > D \"E\"")
+    }
+
+    @Test("Decodes numeric entities")
+    func decodesNumericEntities() {
+        #expect(MailText.plainText(from: "It&#39;s &#x27;fine&#x27;") == "It's 'fine'")
+    }
+
+    @Test("Drops script and style contents")
+    func dropsScriptAndStyle() {
+        let html = """
+        <style>p { color: red; }</style>
+        <p>Dzień dobry</p>
+        <script>alert('x')</script>
+        """
+        #expect(MailText.plainText(from: html) == "Dzień dobry")
     }
 }
 
@@ -89,6 +115,14 @@ struct HTMLFormTests {
         let url = try #require(form.url(relativeTo: URL(string: "https://eduvulcan.pl/fs/ls")!))
 
         #expect(url.absoluteString == "https://eduvulcan.pl/Account/Login")
+    }
+
+    @Test("Decodes numeric entities in hidden inputs")
+    func decodesNumericEntitiesInFields() throws {
+        let html = #"<form action="/x"><input type="hidden" name="v" value="&#x27;a&#39;b"></form>"#
+        let form = try #require(HTMLForm.first(in: html))
+
+        #expect(form.fields.first?.value == "'a'b")
     }
 }
 
@@ -144,5 +178,23 @@ struct PrometheusPayloadTests {
         #expect(object["adresaciSkrzynkiGlobalKeys"] as? [String] == ["parent"])
         #expect(object["powitalna"] as? Bool == false)
         #expect(object["odpowiedziana"] == nil)
+    }
+}
+
+struct CookieSnapshotTests {
+    @Test("Recreates a cookie for the requested host")
+    func recreatesCookieForHost() throws {
+        let original = try #require(HTTPCookie(properties: [
+            .name: "auth",
+            .value: "token",
+            .domain: "eduvulcan.pl",
+            .path: "/"
+        ]))
+        let snapshot = CookieSnapshot(cookie: original)
+        let copy = try #require(snapshot.cookie(for: "wiadomosci.eduvulcan.pl"))
+
+        #expect(copy.name == "auth")
+        #expect(copy.value == "token")
+        #expect(copy.domain.contains("wiadomosci.eduvulcan.pl"))
     }
 }

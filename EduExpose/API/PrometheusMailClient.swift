@@ -346,8 +346,8 @@ actor PrometheusMailClient: MailService {
             VulcanMailboxName.parse(box.name)?
                 .matches(firstName: pupilFirstName, surname: pupilSurname) == true
         } ?? boxes.first { box in
-            box.name.range(of: pupilFirstName, options: .caseInsensitive) != nil
-                && box.name.range(of: pupilSurname, options: .caseInsensitive) != nil
+            VulcanMailboxName.containsWord(pupilFirstName, in: box.name)
+                && VulcanMailboxName.containsWord(pupilSurname, in: box.name)
         } ?? boxes.first
         guard let matched else {
             throw PrometheusMailError.noMailbox
@@ -495,11 +495,18 @@ actor PrometheusMailClient: MailService {
     }
 
     private static func absoluteURL(_ raw: String) -> URL? {
-        guard let url = URL(string: raw) else { return nil }
-        if url.scheme == nil {
-            return URL(string: raw, relativeTo: URL(string: "https://wiadomosci.eduvulcan.pl")!)?.absoluteURL
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, let url = URL(string: trimmed) else { return nil }
+        let resolved = url.scheme == nil
+            ? URL(string: trimmed, relativeTo: URL(string: "https://wiadomosci.eduvulcan.pl")!)?.absoluteURL
+            : url
+        // Attachments are opened outside the app, so only web links are safe.
+        guard let resolved,
+              let scheme = resolved.scheme?.lowercased(),
+              scheme == "https" || scheme == "http" else {
+            return nil
         }
-        return url
+        return resolved
     }
 }
 
@@ -508,6 +515,17 @@ actor PrometheusMailClient: MailService {
 enum MailText {
     static func plainText(from html: String) -> String {
         var text = html
+        // Script and style contents are code, not message text.
+        text = text.replacingOccurrences(
+            of: #"(?is)<script\b[^>]*>.*?</script\s*>"#,
+            with: "",
+            options: [.regularExpression]
+        )
+        text = text.replacingOccurrences(
+            of: #"(?is)<style\b[^>]*>.*?</style\s*>"#,
+            with: "",
+            options: [.regularExpression]
+        )
         text = text.replacingOccurrences(
             of: #"<br\s*/?>"#,
             with: "\n",
@@ -519,16 +537,22 @@ enum MailText {
             options: [.regularExpression, .caseInsensitive]
         )
         text = text.replacingOccurrences(
+            of: #"</(?:div|li|tr|h[1-6])\s*>"#,
+            with: "\n",
+            options: [.regularExpression, .caseInsensitive]
+        )
+        text = text.replacingOccurrences(
             of: #"<[^>]+>"#,
             with: "",
             options: [.regularExpression, .caseInsensitive]
         )
-        text = text.replacingOccurrences(of: "&nbsp;", with: " ")
-        text = text.replacingOccurrences(of: "&lt;", with: "<")
-        text = text.replacingOccurrences(of: "&gt;", with: ">")
-        text = text.replacingOccurrences(of: "&quot;", with: "\"")
-        text = text.replacingOccurrences(of: "&#39;", with: "'")
-        text = text.replacingOccurrences(of: "&amp;", with: "&")
+        text = HTMLEntities.decode(text)
+        text = text.replacingOccurrences(of: "\r\n", with: "\n")
+        text = text.replacingOccurrences(
+            of: #"\n{3,}"#,
+            with: "\n\n",
+            options: [.regularExpression]
+        )
         return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
