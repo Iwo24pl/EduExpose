@@ -48,11 +48,7 @@ struct LoginView: View {
 
     private var header: some View {
         VStack(spacing: 16) {
-            Image(systemName: "graduationcap.fill")
-                .font(.system(size: 36, weight: .semibold))
-                .foregroundStyle(Palette.primary)
-                .frame(width: 84, height: 84)
-                .glassEffect(.regular, in: .circle)
+            BrandLogoView(size: 84)
 
             VStack(spacing: 6) {
                 Text("EduExpose")

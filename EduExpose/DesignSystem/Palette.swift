@@ -1,5 +1,4 @@
 import SwiftUI
-import UIKit
 
 /// Colour parsed from a hex string, kept free of SwiftUI so it can be tested.
 struct SRGB: Equatable, Sendable {
@@ -41,49 +40,58 @@ extension Color {
     }
 }
 
-/// Material 3 olive palette carried over from the Compose app.
+/// Dark navy palette derived from the EduExpose app icon.
+/// The app is intentionally dark-only; every colour below is fixed.
 enum Palette {
-    static let primary = adaptive("4C662B", "B1D18A")
-    static let onPrimary = adaptive("FFFFFF", "1F3701")
-    static let primaryContainer = adaptive("CDEDA3", "354E16")
-    static let onPrimaryContainer = adaptive("354E16", "CDEDA3")
+    static let brandNavyDeep = Color(hex: "02091F")
+    static let brandNavy = Color(hex: "031554")
+    static let brandNavyLift = Color(hex: "062B72")
+    static let brandBlue = Color(hex: "0085F8")
+    static let brandBlueSoft = Color(hex: "4FA8FF")
 
-    static let secondaryContainer = adaptive("DCE7C8", "404A33")
-    static let tertiaryContainer = adaptive("BCECE7", "1F4E4B")
+    static let primary = brandBlueSoft
+    static let onPrimary = Color(hex: "001A3D")
+    static let primaryContainer = Color(hex: "0A2E6B")
+    static let onPrimaryContainer = Color(hex: "D7E8FF")
 
-    static let background = adaptive("F9FAEF", "12140E")
-    static let surfaceContainer = adaptive("EEEFE3", "1E201A")
-    static let onSurface = adaptive("1A1C16", "E2E3D8")
-    static let onSurfaceVariant = adaptive("44483D", "C5C8BA")
-    static let outline = adaptive("75796C", "8F9285")
-    static let error = adaptive("BA1A1A", "FFB4AB")
-    static let success = adaptive("2F6B3A", "9BD48A")
-    static let warning = adaptive("8A5A00", "FFC46B")
+    static let secondaryContainer = Color(hex: "0A2350")
+    static let tertiaryContainer = Color(hex: "0B3C6E")
 
-    private static func adaptive(_ light: String, _ dark: String) -> Color {
-        Color(uiColor: UIColor { traits in
-            uiColor(hex: traits.userInterfaceStyle == .dark ? dark : light)
-        })
-    }
-
-    private static func uiColor(hex: String) -> UIColor {
-        let rgb = SRGB(hex: hex) ?? .black
-        return UIColor(red: rgb.red, green: rgb.green, blue: rgb.blue, alpha: 1)
-    }
+    static let background = brandNavyDeep
+    static let surfaceContainer = Color(hex: "071B44")
+    static let onSurface = Color(hex: "F3F7FF")
+    static let onSurfaceVariant = Color(hex: "B7C7E6")
+    static let outline = Color(hex: "6D84AE")
+    static let error = Color(hex: "FFB4AB")
+    static let success = Color(hex: "8BE0A4")
+    static let warning = Color(hex: "FFD27A")
 }
 
-/// Soft olive wash behind glass surfaces.
+/// Dark navy wash behind glass surfaces.
 struct ScreenBackground: View {
     var body: some View {
-        LinearGradient(
-            colors: [
-                Palette.background,
-                Palette.primaryContainer.opacity(0.35),
-                Palette.tertiaryContainer.opacity(0.25)
-            ],
-            startPoint: .topLeading,
-            endPoint: .bottomTrailing
-        )
+        ZStack {
+            LinearGradient(
+                colors: [
+                    Palette.brandNavyDeep,
+                    Palette.brandNavy,
+                    Palette.brandNavyLift
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+
+            RadialGradient(
+                colors: [
+                    Palette.brandBlue.opacity(0.20),
+                    Palette.brandBlue.opacity(0.04),
+                    Color.clear
+                ],
+                center: .topTrailing,
+                startRadius: 24,
+                endRadius: 520
+            )
+        }
         .ignoresSafeArea()
     }
 }

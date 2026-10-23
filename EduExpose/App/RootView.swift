@@ -17,6 +17,8 @@ struct RootView: View {
             }
         }
         .environment(model)
+        .preferredColorScheme(.dark)
+        .tint(Palette.primary)
         .task {
             await model.bootstrap()
         }
@@ -28,11 +30,7 @@ private struct LaunchView: View {
         ZStack {
             ScreenBackground()
             VStack(spacing: 18) {
-                Image(systemName: "graduationcap.fill")
-                    .font(.system(size: 42))
-                    .foregroundStyle(Palette.primary)
-                    .glassEffect(.regular, in: .circle)
-                    .frame(width: 88, height: 88)
+                BrandLogoView(size: 88)
                 ProgressView()
                     .tint(Palette.primary)
                 Text("EduExpose")
@@ -40,6 +38,24 @@ private struct LaunchView: View {
                     .foregroundStyle(Palette.onSurface)
             }
         }
+    }
+}
+
+struct BrandLogoView: View {
+    let size: CGFloat
+
+    var body: some View {
+        Image("BrandLogo")
+            .resizable()
+            .scaledToFill()
+            .frame(width: size, height: size)
+            .clipShape(Circle())
+            .overlay {
+                Circle()
+                    .stroke(Color.white.opacity(0.14), lineWidth: 1)
+            }
+            .shadow(color: Palette.brandBlue.opacity(0.35), radius: size * 0.22)
+            .accessibilityLabel("Logo EduExpose")
     }
 }
 

@@ -15,6 +15,14 @@ na iOS 26+, z Liquid Glass i bez pozostałości Kotlina.
 | Dystrybucja | niepodpisane IPA z GitHub Actions + Sideloadly |
 | Bundle ID | com.iwo24pl.eduexpose |
 
+## Stan po przebudowie
+
+- [x] wiadomości z Prometheus dla kont nie-Hebe, z fallbackiem odczytu Hebe
+- [x] wysyłanie, odpowiedź i przekazywanie wiadomości tekstowych
+- [x] ciemny granatowy motyw, ikona aplikacji i ekran startowy z logo
+- [ ] załączniki w wysyłanych wiadomościach
+- [ ] weryfikacja live payloadów wysyłki na koncie produkcyjnym
+
 ## Etapy
 
 - [x] **M0 — fundament**: XcodeGen, paleta, Liquid Glass, 5 zakładek, CI + IPA
