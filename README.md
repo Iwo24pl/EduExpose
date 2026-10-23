@@ -1,7 +1,7 @@
 # EduExpose
 
 Natywny klient eduVULCAN dla iOS, napisany w SwiftUI. Przepisanie projektu
-Dzienniczek Szpontniczek (Szpontium) z Kotlina na Swift 6 i Liquid Glass.
+Dzienniczek Szpontniczek (Szpontium) z Kotlina/Compose na Swift 6 i Liquid Glass.
 
 Status - **pełny klient**. Wszystkie ekrany, logowanie eduVULCAN, podpisywanie
 Hebe, obsługa wielu uczniów i sesja w Keychain są gotowe. CI buduje, testuje,
