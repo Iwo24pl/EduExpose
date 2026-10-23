@@ -8,22 +8,28 @@ struct HTMLForm: Sendable {
     }
 
     let action: String
+    let name: String
     let fields: [Field]
 
     static func first(in html: String) -> HTMLForm? {
         forms(in: html).first
     }
 
-    /// The WS-Federation form (`wa` / `wresult` / `wctx`) that completes the
-    /// eduVULCAN SSO handshake. SSO pages can contain other forms, so never
-    /// submit whichever form happens to come first.
+    /// The WS-Federation form that completes the eduVULCAN SSO handshake.
+    /// Proven clients (JS `hebece-prometheusweb`) select `form[name=hiddenform]`;
+    /// fall back to field matching when the name is absent.
     static func sso(in html: String) -> HTMLForm? {
-        forms(in: html).first { form in
+        hiddenform(in: html) ?? forms(in: html).first { form in
             let names = Set(form.fields.map(\.name))
             return names.contains("wa")
                 && names.contains("wresult")
                 && names.contains("wctx")
         }
+    }
+
+    /// Selects `<form name="hiddenform">` like the working JS implementation.
+    static func hiddenform(in html: String) -> HTMLForm? {
+        forms(in: html).first { $0.name.lowercased() == "hiddenform" }
     }
 
     static func forms(in html: String) -> [HTMLForm] {
@@ -68,7 +74,8 @@ struct HTMLForm: Sendable {
             }
         }
 
-        return HTMLForm(action: HTMLEntities.decode(action), fields: fields)
+        let name = LoginPage.attribute(form, "name") ?? ""
+        return HTMLForm(action: HTMLEntities.decode(action), name: name, fields: fields)
     }
 
     func url(relativeTo base: URL) -> URL? {

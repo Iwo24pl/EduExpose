@@ -166,6 +166,21 @@ struct HTMLFormTests {
 
         #expect(form.fields.first?.value == "'a'b")
     }
+
+    @Test("Finds hiddenform by name even without WS-Fed fields")
+    func findsHiddenformByName() throws {
+        let html = """
+        <form action="/login" method="post">
+          <input type="hidden" name="UserName" value="">
+        </form>
+        <form name="hiddenform" action="https://uczen.eduvulcan.pl/krakow/Start" method="post">
+          <input type="hidden" name="wa" value="wsignin1.0">
+        </form>
+        """
+        let form = try #require(HTMLForm.hiddenform(in: html))
+
+        #expect(form.action == "https://uczen.eduvulcan.pl/krakow/Start")
+    }
 }
 
 struct PrometheusPayloadTests {
@@ -310,5 +325,20 @@ struct MailSessionMetadataTests {
         #expect(metadata.isComplete)
         #expect(metadata.appGuid == "guid-value")
         #expect(metadata.antiForgeryToken == "token-value")
+    }
+
+    @Test("Parses VParam JSON including wiadomosciUrl")
+    func readsVParamJSON() {
+        let html = """
+        <html><head><title>Uczeń</title></head><body>
+        <script>var VParam = {"antiForgeryToken": "tok", "appGuid": "guid",
+          "apiUrl": "https://uczen.eduvulcan.pl/krakow/api",
+          "wiadomosciUrl": "https://wiadomosci.eduvulcan.pl/krakow/App"};</script>
+        </body></html>
+        """
+        let metadata = MailSessionMetadata.parse(html)
+
+        #expect(metadata.isComplete)
+        #expect(metadata.wiadomosciURL?.absoluteString == "https://wiadomosci.eduvulcan.pl/krakow/App")
     }
 }

@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 // MARK: - API payloads
 
@@ -389,6 +390,22 @@ actor PrometheusMailClient: MailService {
     /// of intermediate forms. Starting at the mailbox itself mirrors a browser:
     /// its redirect chain goes through the portal and ends at the app page.
     private func completeSSO() async throws {
+        // Diary first: the proven path to the real mailbox URL.
+        if let diaryURL = await diaryWiadomosciURL() {
+            do {
+                let page = try await followSSO(from: diaryURL)
+                if let metadata = mailboxMetadata(from: page) {
+                    apply(metadata)
+                    await trace(
+                        "metadata.ok",
+                        "via-diary api=\(metadata.apiURL.map(MailTraceRedaction.safeURL) ?? "-")"
+                    )
+                    return
+                }
+            } catch let error as PrometheusMailError {
+                await trace("sso.diary.entry.error", "\(String(describing: error))")
+            }
+        }
         // The mailbox redirects through the portal by itself. The explicit SSO
         // entry points remain as a fallback for older accounts.
         var entries = [appURL]
@@ -421,6 +438,64 @@ actor PrometheusMailClient: MailService {
         }
         await trace("sso.failed", "\(String(describing: lastError))")
         throw lastError
+    }
+
+    /// Diary-first handshake (proven by the JS `hebece-prometheusweb` client):
+    /// the diary (`Uczeń`) SSO session issues the real `wiadomosciUrl` in its
+    /// `VParam`. Hardcoded `wiadomosci.eduvulcan.pl` guesses break on custom
+    /// domains and skip this session entirely.
+    private func diaryWiadomosciURL() async -> URL? {
+        guard let access = URL(string: "https://eduvulcan.pl/dostep-do-dziennik/") else {
+            return nil
+        }
+        do {
+            let page = try await getHTML(access)
+            await trace("sso.diary.access", MailTraceRedaction.safeURL(page.url))
+            guard let journal = Self.diaryLink(in: page.html, relativeTo: page.url) else {
+                await trace("sso.diary.nolink", "head=\(MailTraceRedaction.htmlHead(page.html))")
+                return nil
+            }
+            await trace("sso.diary.journal", MailTraceRedaction.safeURL(journal))
+            var current = try await getHTML(journal)
+            for _ in 0..<2 {
+                guard let form = HTMLForm.hiddenform(in: current.html) ?? HTMLForm.sso(in: current.html) else {
+                    break
+                }
+                current = try await submit(form, relativeTo: current.url)
+            }
+            let metadata = MailSessionMetadata.parse(current.html)
+            if let url = metadata.wiadomosciURL {
+                await trace("sso.diary.wiadomosci", MailTraceRedaction.safeURL(url))
+                return url
+            }
+            await trace("sso.diary.novparam", "head=\(MailTraceRedaction.htmlHead(current.html))")
+        } catch {
+            await trace("sso.diary.error", "\(String(describing: error))")
+        }
+        return nil
+    }
+
+    private static func diaryLink(in html: String, relativeTo base: URL) -> URL? {
+        guard let regex = try? NSRegularExpression(
+            pattern: #"<a\b[^>]*\bhref\s*=\s*"([^"]+)"[^>]*>"#,
+            options: [.caseInsensitive, .dotMatchesLineSeparators]
+        ) else {
+            return nil
+        }
+        let text = html as NSString
+        var fallback: URL?
+        for match in regex.matches(in: html, range: NSRange(location: 0, length: text.length)) {
+            let href = HTMLEntities.decode(text.substring(with: match.range(at: 1)))
+            guard let resolved = URL(string: href, relativeTo: base)?.absoluteURL else { continue }
+            let host = resolved.host?.lowercased() ?? ""
+            if host.hasPrefix("uczen.") {
+                return resolved
+            }
+            if fallback == nil, href.lowercased().contains("dziennik") {
+                fallback = resolved
+            }
+        }
+        return fallback
     }
 
     private func followSSO(from url: URL) async throws -> (html: String, url: URL) {
@@ -692,16 +767,76 @@ struct MailSessionMetadata: Equatable, Sendable {
     let antiForgeryToken: String
     let appGuid: String
     let apiURL: URL?
+    /// Diary (`Uczeń`) pages expose the mailbox entry point here; the working
+    /// JS client reads `wiadomosciUrl` instead of constructing the host.
+    let wiadomosciURL: URL?
 
     var isComplete: Bool {
         !antiForgeryToken.isEmpty && !appGuid.isEmpty
     }
 
     static func parse(_ html: String) -> MailSessionMetadata {
-        MailSessionMetadata(
+        if let vparam = parseVParamJSON(html) {
+            return vparam
+        }
+        return MailSessionMetadata(
             antiForgeryToken: value("antiForgeryToken", in: html) ?? "",
             appGuid: value("appGuid", in: html) ?? "",
-            apiURL: webURL(value("apiUrl", in: html))
+            apiURL: webURL(value("apiUrl", in: html)),
+            wiadomosciURL: webURL(value("wiadomosciUrl", in: html))
+        )
+    }
+
+    /// The proven clients parse `var VParam = {...};` as JSON. Prefer that over
+    /// per-token regexes; it also yields `wiadomosciUrl` and `apiUrl` exactly.
+    private static func parseVParamJSON(_ html: String) -> MailSessionMetadata? {
+        let pattern = #"var\s+VParam\s*=\s*(\{.*?\});"#
+        guard let regex = try? NSRegularExpression(
+            pattern: pattern,
+            options: [.caseInsensitive, .dotMatchesLineSeparators]
+        ) else {
+            return nil
+        }
+        let text = html as NSString
+        guard let match = regex.firstMatch(
+            in: html,
+            range: NSRange(location: 0, length: text.length)
+        ), match.numberOfRanges > 1 else {
+            return nil
+        }
+        var raw = text.substring(with: match.range(at: 1))
+        // JS sources tolerate trailing commas / single quotes; normalize best-effort.
+        raw = raw.replacingOccurrences(of: "'", with: "\"")
+        raw = raw.replacingOccurrences(
+            of: #",(\s*[}\]])"#,
+            with: "$1",
+            options: .regularExpression
+        )
+        guard let data = raw.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+        func string(_ keys: String...) -> String {
+            for key in keys {
+                if let value = json[key] as? String, !value.isEmpty {
+                    return HTMLEntities.decode(value)
+                }
+                // Case-insensitive fallback.
+                if let found = json.first(where: { $0.key.lowercased() == key.lowercased() })?.value as? String,
+                   !found.isEmpty {
+                    return HTMLEntities.decode(found)
+                }
+            }
+            return ""
+        }
+        let token = string("antiForgeryToken")
+        let guid = string("appGuid")
+        guard !token.isEmpty || !guid.isEmpty else { return nil }
+        return MailSessionMetadata(
+            antiForgeryToken: token,
+            appGuid: guid,
+            apiURL: webURL(string("apiUrl")),
+            wiadomosciURL: webURL(string("wiadomosciUrl"))
         )
     }
 
