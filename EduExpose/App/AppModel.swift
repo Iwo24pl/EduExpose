@@ -92,10 +92,8 @@ final class AppModel {
         do {
             let found = try await PrometheusLoginService(session: session)
                 .signIn(login: login, password: password)
-            let portalCookies = CookieSnapshot.capture(
-                HTTPCookieStorage.shared.cookies(
-                    for: URL(string: "https://eduvulcan.pl")!
-                ) ?? []
+            let portalCookies = CookieSnapshot.capturePortal(
+                HTTPCookieStorage.shared.cookies ?? []
             )
             // A new portal login invalidates cookies held by other accounts.
             mailCookies = [:]

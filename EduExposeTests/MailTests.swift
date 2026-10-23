@@ -117,6 +117,48 @@ struct HTMLFormTests {
         #expect(url.absoluteString == "https://eduvulcan.pl/Account/Login")
     }
 
+    @Test("An empty action posts back to the current page")
+    func emptyActionUsesCurrentPage() throws {
+        let html = #"<form action="" method="post"><input type="hidden" name="x" value="1"></form>"#
+        let form = try #require(HTMLForm.first(in: html))
+        let base = try #require(URL(string: "https://eduvulcan.pl/fs/ls?wa=wsignin1.0"))
+        let url = try #require(form.url(relativeTo: base))
+
+        #expect(url.absoluteString == base.absoluteString)
+    }
+
+    @Test("Picks the WS-Federation form instead of the first form")
+    func findsSSOForm() throws {
+        let html = """
+        <form action="/login" method="post">
+          <input type="hidden" name="UserName" value="">
+        </form>
+        <form name="hiddenform" action="https://wiadomosci.eduvulcan.pl/krakow/Account/Login" method="post">
+          <input type="hidden" name="wa" value="wsignin1.0">
+          <input type="hidden" name="wresult" value="token">
+          <input type="hidden" name="wctx" value="ctx">
+        </form>
+        """
+        let form = try #require(HTMLForm.sso(in: html))
+
+        #expect(form.action == "https://wiadomosci.eduvulcan.pl/krakow/Account/Login")
+        #expect(form.fields.count == 3)
+    }
+
+    @Test("Encodes form bodies without losing plus signs")
+    func encodesFormBody() throws {
+        let html = #"<form action="/sso"><input type="hidden" name="wresult" value="a+b c/d=="></form>"#
+        let form = try #require(HTMLForm.first(in: html))
+        let body = String(decoding: form.body, as: UTF8.self)
+
+        #expect(body == "wresult=a%2Bb+c%2Fd%3D%3D")
+    }
+
+    @Test("Encodes non-ASCII form values as UTF-8")
+    func encodesUnicodeFormBody() {
+        #expect(FormURLEncoding.encode([("q", "ąć +")]) == "q=%C4%85%C4%87+%2B")
+    }
+
     @Test("Decodes numeric entities in hidden inputs")
     func decodesNumericEntitiesInFields() throws {
         let html = #"<form action="/x"><input type="hidden" name="v" value="&#x27;a&#39;b"></form>"#
@@ -182,8 +224,8 @@ struct PrometheusPayloadTests {
 }
 
 struct CookieSnapshotTests {
-    @Test("Recreates a cookie for the requested host")
-    func recreatesCookieForHost() throws {
+    @Test("Preserves the original cookie domain and path")
+    func preservesCookieScope() throws {
         let original = try #require(HTTPCookie(properties: [
             .name: "auth",
             .value: "token",
@@ -191,10 +233,56 @@ struct CookieSnapshotTests {
             .path: "/"
         ]))
         let snapshot = CookieSnapshot(cookie: original)
-        let copy = try #require(snapshot.cookie(for: "wiadomosci.eduvulcan.pl"))
+        let copy = try #require(snapshot.cookie)
 
         #expect(copy.name == "auth")
         #expect(copy.value == "token")
-        #expect(copy.domain.contains("wiadomosci.eduvulcan.pl"))
+        #expect(copy.domain.contains("eduvulcan.pl"))
+        #expect(copy.path == "/")
+    }
+
+    @Test("Captures only the portal's own cookies")
+    func capturesPortalCookiesOnly() throws {
+        let portal = try #require(HTTPCookie(properties: [
+            .name: "portal", .value: "1", .domain: "eduvulcan.pl", .path: "/"
+        ]))
+        let staleMailbox = try #require(HTTPCookie(properties: [
+            .name: "student", .value: "2", .domain: "uczen.eduvulcan.pl", .path: "/"
+        ]))
+        let unrelated = try #require(HTTPCookie(properties: [
+            .name: "hebe", .value: "3", .domain: "lekcjaplus.vulcan.net.pl", .path: "/"
+        ]))
+
+        let captured = CookieSnapshot.capturePortal([portal, staleMailbox, unrelated])
+
+        #expect(captured.map(\.name) == ["portal"])
+    }
+}
+
+struct MailSessionMetadataTests {
+    @Test("Reads tokens from the VParam object")
+    func readsVParam() throws {
+        let html = """
+        <script>
+        var VParam = { antiForgeryToken: 'token-value', appGuid: 'guid-value',
+          apiUrl: 'https://wiadomosci.eduvulcan.pl/krakow/api' };
+        </script>
+        """
+        let metadata = MailSessionMetadata.parse(html)
+
+        #expect(metadata.isComplete)
+        #expect(metadata.antiForgeryToken == "token-value")
+        #expect(metadata.appGuid == "guid-value")
+        #expect(metadata.apiURL?.absoluteString == "https://wiadomosci.eduvulcan.pl/krakow/api")
+    }
+
+    @Test("Accepts assignment syntax and double quotes")
+    func readsAssignmentSyntax() {
+        let html = #"appGuid = "guid-value"; antiForgeryToken = "token-value";"#
+        let metadata = MailSessionMetadata.parse(html)
+
+        #expect(metadata.isComplete)
+        #expect(metadata.appGuid == "guid-value")
+        #expect(metadata.antiForgeryToken == "token-value")
     }
 }

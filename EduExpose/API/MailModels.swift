@@ -161,27 +161,32 @@ struct VulcanMailboxName: Equatable, Sendable {
 
 // MARK: - Cookie hand-off
 
-/// A Sendable snapshot of an `HTTPCookie`. The client recreates the cookie for
-/// each VULCAN host instead of relying on the shared login cookie domain.
+/// A Sendable snapshot of an `HTTPCookie`. Domain and path are preserved so the
+/// cookie behaves like it did in the browser session that created it; cookies
+/// are not copied onto unrelated hosts.
 struct CookieSnapshot: Sendable {
     let name: String
     let value: String
+    let domain: String
+    let path: String
     let expires: Date?
     let isSecure: Bool
 
     init(cookie: HTTPCookie) {
         name = cookie.name
         value = cookie.value
+        domain = cookie.domain
+        path = cookie.path.isEmpty ? "/" : cookie.path
         expires = cookie.expiresDate
         isSecure = cookie.isSecure
     }
 
-    func cookie(for domain: String) -> HTTPCookie? {
+    var cookie: HTTPCookie? {
         var properties: [HTTPCookiePropertyKey: Any] = [
             .name: name,
             .value: value,
             .domain: domain,
-            .path: "/"
+            .path: path
         ]
         if let expires {
             properties[.expires] = expires
@@ -192,8 +197,17 @@ struct CookieSnapshot: Sendable {
         return HTTPCookie(properties: properties)
     }
 
-    static func capture(_ cookies: [HTTPCookie]) -> [CookieSnapshot] {
-        cookies.map { CookieSnapshot(cookie: $0) }
+    /// Only the portal's own session cookies. Subdomain cookies from an old
+    /// SSO/mailbox session must not be replayed into a new one, and unrelated
+    /// VULCAN sessions (for example a Hebe registration cookie) are excluded.
+    static func capturePortal(_ cookies: [HTTPCookie]) -> [CookieSnapshot] {
+        cookies.filter { cookie in
+            let domain = cookie.domain
+                .lowercased()
+                .trimmingCharacters(in: CharacterSet(charactersIn: "."))
+            return domain == "eduvulcan.pl"
+        }
+        .map(CookieSnapshot.init)
     }
 }
 

@@ -199,9 +199,7 @@ struct PrometheusLoginService {
             throw LoginError.api(apiAp.errorMessage ?? "API /api/ap zwróciło błąd.")
         }
         let storage = session.configuration.httpCookieStorage ?? .shared
-        return CookieSnapshot.capture(
-            storage.cookies(for: URL(string: base)!) ?? []
-        )
+        return CookieSnapshot.capturePortal(storage.cookies ?? [])
     }
 
     private func authenticate(login: String, password: String) async throws -> ApiApResponse {
@@ -489,9 +487,7 @@ struct PrometheusLoginService {
     // MARK: Tiny HTML helpers
 
     private func formBody(_ pairs: [(String, String)]) -> Data {
-        var components = URLComponents()
-        components.queryItems = pairs.map { URLQueryItem(name: $0.0, value: $0.1) }
-        return Data((components.percentEncodedQuery ?? "").utf8)
+        Data(FormURLEncoding.encode(pairs).utf8)
     }
 }
 

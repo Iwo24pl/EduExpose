@@ -11,15 +11,40 @@ struct HTMLForm: Sendable {
     let fields: [Field]
 
     static func first(in html: String) -> HTMLForm? {
-        guard let form = LoginPage.firstMatch(
-            html,
-            #"<form\b[^>]*>.*?</form>"#
-        )?.first,
-            let action = LoginPage.attribute(form, "action"),
-            !action.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            return nil
+        forms(in: html).first
+    }
+
+    /// The WS-Federation form (`wa` / `wresult` / `wctx`) that completes the
+    /// eduVULCAN SSO handshake. SSO pages can contain other forms, so never
+    /// submit whichever form happens to come first.
+    static func sso(in html: String) -> HTMLForm? {
+        forms(in: html).first { form in
+            let names = Set(form.fields.map(\.name))
+            return names.contains("wa")
+                && names.contains("wresult")
+                && names.contains("wctx")
+        }
+    }
+
+    static func forms(in html: String) -> [HTMLForm] {
+        guard let regex = try? NSRegularExpression(
+            pattern: #"<form\b[^>]*>.*?</form>"#,
+            options: [.caseInsensitive, .dotMatchesLineSeparators]
+        ) else {
+            return []
         }
 
+        let text = html as NSString
+        return regex.matches(
+            in: html,
+            range: NSRange(location: 0, length: text.length)
+        ).map { match in
+            let form = text.substring(with: match.range)
+            return parse(form, action: LoginPage.attribute(form, "action") ?? "")
+        }
+    }
+
+    private static func parse(_ form: String, action: String) -> HTMLForm {
         var fields: [Field] = []
         if let regex = try? NSRegularExpression(
             pattern: #"<input\b[^>]*>"#,
@@ -47,15 +72,37 @@ struct HTMLForm: Sendable {
     }
 
     func url(relativeTo base: URL) -> URL? {
-        URL(string: action, relativeTo: base)?.absoluteURL
+        let target = action.trimmingCharacters(in: .whitespacesAndNewlines)
+        // A form with no action posts back to the page that rendered it.
+        guard !target.isEmpty else { return base }
+        return URL(string: target, relativeTo: base)?.absoluteURL
     }
 
     var body: Data {
-        var components = URLComponents()
-        components.queryItems = fields.map {
-            URLQueryItem(name: $0.name, value: $0.value)
+        Data(FormURLEncoding.encode(fields.map { ($0.name, $0.value) }).utf8)
+    }
+}
+
+/// `application/x-www-form-urlencoded` encoding.
+///
+/// `URLComponents` is not a form encoder: it leaves `+` untouched, but form
+/// servers decode a literal `+` as a space. SAML `wresult` tokens are base64
+/// and commonly contain `+`, so using `URLComponents` corrupts the SSO token.
+enum FormURLEncoding {
+    static func encode(_ pairs: [(String, String)]) -> String {
+        pairs.map { "\(escape($0.0))=\(escape($0.1))" }
+            .joined(separator: "&")
+    }
+
+    private static func escape(_ value: String) -> String {
+        // ASCII unreserved set only; non-ASCII is sent as percent-encoded UTF-8.
+        let allowed = CharacterSet(
+            charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._* "
+        )
+        guard let encoded = value.addingPercentEncoding(withAllowedCharacters: allowed) else {
+            return ""
         }
-        return Data((components.percentEncodedQuery ?? "").utf8)
+        return encoded.replacingOccurrences(of: " ", with: "+")
     }
 }
 

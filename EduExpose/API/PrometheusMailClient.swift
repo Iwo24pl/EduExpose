@@ -98,6 +98,7 @@ actor PrometheusMailClient: MailService {
     private var selectedMailbox: Mailbox?
     private var antiForgeryToken = ""
     private var appGuid = ""
+    private var apiBase: URL?
 
     private let portalBase = URL(string: "https://eduvulcan.pl")!
     private let ssoBase = URL(string: "https://dziennik-logowanie.vulcan.net.pl")!
@@ -121,15 +122,15 @@ actor PrometheusMailClient: MailService {
         let endpoint: String
         switch kind {
         case .received:
-            endpoint = "/api/OdebraneSkrzynka"
+            endpoint = "OdebraneSkrzynka"
         case .sent:
-            endpoint = "/api/WyslaneSkrzynka"
+            endpoint = "WyslaneSkrzynka"
         case .deleted:
-            endpoint = "/api/UsunieteSkrzynka"
+            endpoint = "UsunieteSkrzynka"
         }
 
         let data = try await apiRequest(
-            path: "/\(tenant)\(endpoint)",
+            endpoint: endpoint,
             query: [
                 URLQueryItem(name: "globalKeySkrzynka", value: mailbox.globalKey),
                 URLQueryItem(name: "idLastWiadomosc", value: "0"),
@@ -154,7 +155,7 @@ actor PrometheusMailClient: MailService {
 
     func detail(id: String) async throws -> MailMessageDetail {
         let data = try await apiRequest(
-            path: "/\(tenant)/api/WiadomoscSzczegoly",
+            endpoint: "WiadomoscSzczegoly",
             query: [URLQueryItem(name: "apiGlobalKey", value: id)]
         )
         let item = try decoder.decode(PrometheusMessageDetailsDTO.self, from: data)
@@ -182,7 +183,7 @@ actor PrometheusMailClient: MailService {
     func markRead(id: String) async throws {
         let body = try JSONSerialization.data(withJSONObject: ["apiGlobalKey": id])
         _ = try await apiRequest(
-            path: "/\(tenant)/api/WiadomoscSzczegoly",
+            endpoint: "WiadomoscSzczegoly",
             method: "PUT",
             body: body
         )
@@ -207,7 +208,7 @@ actor PrometheusMailClient: MailService {
             odpowiedziana: nil,
             przekazana: nil
         )
-        try await post(payload, endpoint: "/api/WiadomoscNowa")
+        try await post(payload, endpoint: "WiadomoscNowa")
     }
 
     func reply(_ draft: MailDraft, to id: String) async throws {
@@ -224,7 +225,7 @@ actor PrometheusMailClient: MailService {
             odpowiedziana: id,
             przekazana: nil
         )
-        try await post(payload, endpoint: "/api/WiadomoscOdpowiedzPrzekaz")
+        try await post(payload, endpoint: "WiadomoscOdpowiedzPrzekaz")
     }
 
     func forward(_ draft: MailDraft, from id: String) async throws {
@@ -241,54 +242,126 @@ actor PrometheusMailClient: MailService {
             odpowiedziana: nil,
             przekazana: id
         )
-        try await post(payload, endpoint: "/api/WiadomoscOdpowiedzPrzekaz")
+        try await post(payload, endpoint: "WiadomoscOdpowiedzPrzekaz")
     }
 
     // MARK: Initialization
 
     private func ensureInitialized() async throws {
         if isInitialized { return }
-        guard !tenant.isEmpty, !login.isEmpty, !password.isEmpty else {
+        guard !tenant.isEmpty else {
             throw PrometheusMailError.missingCredentials
         }
 
-        if initialCookies.isEmpty {
-            let storage = session.configuration.httpCookieStorage ?? .shared
-            clearCookies(storage, hosts: [
-                "dziennik-logowanie.vulcan.net.pl",
-                "wiadomosci.eduvulcan.pl"
-            ])
-            do {
-                let cookies = try await PrometheusLoginService(session: session)
-                    .portalCookies(login: login, password: password)
-                seedCookies(cookies, clearAll: false)
-            } catch {
-                throw PrometheusMailError.loginFailed
-            }
-        } else {
+        let usedStoredCookies = !initialCookies.isEmpty
+        if usedStoredCookies {
             seedCookies(initialCookies, clearAll: true)
+        } else {
+            guard !login.isEmpty, !password.isEmpty else {
+                throw PrometheusMailError.missingCredentials
+            }
+            try await signInForCookies(clearAll: false)
         }
 
-        try await authorize(firstAuthURL)
-        try await authorize(secondAuthURL)
-
-        let appPage = try await getHTML(appURL)
-        let appHTML = appPage.html
-        antiForgeryToken = Self.token("antiForgeryToken", in: appHTML) ?? ""
-        appGuid = Self.token("appGuid", in: appHTML) ?? ""
-        guard !antiForgeryToken.isEmpty, !appGuid.isEmpty else {
-            throw PrometheusMailError.sessionExpired
+        do {
+            try await completeSSO()
+        } catch {
+            guard usedStoredCookies,
+                  let mailError = error as? PrometheusMailError,
+                  case .sessionExpired = mailError,
+                  !login.isEmpty,
+                  !password.isEmpty else {
+                throw error
+            }
+            // Cookies captured after logging in can expire while the app is
+            // open; authenticate once more before giving up.
+            try await signInForCookies(clearAll: true)
+            try await completeSSO()
         }
 
         isInitialized = true
     }
 
-    private func authorize(_ url: URL) async throws {
-        let (html, responseURL) = try await getHTML(url)
-        guard let form = HTMLForm.first(in: html) else { return }
-        let (secondHTML, secondURL) = try await submit(form, relativeTo: responseURL)
-        if let second = HTMLForm.first(in: secondHTML) {
-            _ = try await submit(second, relativeTo: secondURL)
+    private func signInForCookies(clearAll: Bool) async throws {
+        let storage = session.configuration.httpCookieStorage ?? .shared
+        var hosts = [
+            "uczen.eduvulcan.pl",
+            "dziennik-logowanie.vulcan.net.pl",
+            "wiadomosci.eduvulcan.pl"
+        ]
+        if clearAll {
+            hosts.insert("eduvulcan.pl", at: 0)
+        }
+        clearCookies(storage, hosts: hosts)
+
+        let cookies: [CookieSnapshot]
+        do {
+            cookies = try await PrometheusLoginService(session: session)
+                .portalCookies(login: login, password: password)
+        } catch {
+            throw PrometheusMailError.loginFailed
+        }
+        guard !cookies.isEmpty else {
+            throw PrometheusMailError.loginFailed
+        }
+        seedCookies(cookies, clearAll: false)
+    }
+
+    /// Follows the WS-Federation handshake instead of assuming a fixed number
+    /// of intermediate forms. Starting at the mailbox itself mirrors a browser:
+    /// its redirect chain goes through the portal and ends at the app page.
+    private func completeSSO() async throws {
+        // The mailbox redirects through the portal by itself. The explicit SSO
+        // entry points remain as a fallback for older accounts.
+        var lastError = PrometheusMailError.sessionExpired
+        for url in [appURL, firstAuthURL, secondAuthURL, appURL] {
+            do {
+                let page = try await followSSO(from: url)
+                if let metadata = mailboxMetadata(from: page) {
+                    apply(metadata)
+                    return
+                }
+            } catch let error as PrometheusMailError {
+                // A rejected entry point should not prevent trying the next one.
+                lastError = error
+            }
+        }
+        throw lastError
+    }
+
+    private func followSSO(from url: URL) async throws -> (html: String, url: URL) {
+        var page = try await getHTML(url)
+        for _ in 0..<10 {
+            if mailboxMetadata(from: page) != nil {
+                return page
+            }
+            guard let form = HTMLForm.sso(in: page.html) else {
+                return page
+            }
+            page = try await submit(form, relativeTo: page.url)
+        }
+        return page
+    }
+
+    /// The student app also embeds `antiForgeryToken`/`appGuid`; those must not
+    /// be mistaken for the mailbox session, so require a mailbox host or apiUrl.
+    private func mailboxMetadata(from page: (html: String, url: URL)) -> MailSessionMetadata? {
+        let metadata = MailSessionMetadata.parse(page.html)
+        guard metadata.isComplete else { return nil }
+        let pageHost = page.url.host?.lowercased() ?? ""
+        let apiHost = metadata.apiURL?.host?.lowercased() ?? ""
+        guard pageHost.contains("wiadomosci") || apiHost.contains("wiadomosci") else {
+            return nil
+        }
+        return metadata
+    }
+
+    private func apply(_ metadata: MailSessionMetadata) {
+        antiForgeryToken = metadata.antiForgeryToken
+        appGuid = metadata.appGuid
+        if let apiURL = metadata.apiURL,
+           apiURL.host?.lowercased().contains("wiadomosci") == true {
+            apiBase = apiURL
         }
     }
 
@@ -357,7 +430,7 @@ actor PrometheusMailClient: MailService {
     }
 
     private func fetchMailboxes() async throws -> [Mailbox] {
-        let data = try await apiRequest(path: "/\(tenant)/api/Skrzynki")
+        let data = try await apiRequest(endpoint: "Skrzynki")
         let boxes = try decoder.decode([PrometheusMailboxDTO].self, from: data)
         return boxes.map {
             Mailbox(globalKey: $0.globalKey, name: $0.nazwa, type: $0.typUzytkownika)
@@ -370,19 +443,36 @@ actor PrometheusMailClient: MailService {
         JSONDecoder()
     }
 
+    /// `apiUrl` from the signed-in page can point at a different host or path;
+    /// fall back to the historical tenant endpoint when it is absent.
+    private var resolvedAPIBase: URL {
+        if let apiBase { return apiBase }
+        return messagesBase
+            .appendingPathComponent(tenant)
+            .appendingPathComponent("api")
+    }
+
+    private func apiEndpoint(_ endpoint: String) -> URL {
+        resolvedAPIBase.appendingPathComponent(endpoint)
+    }
+
     private func apiRequest(
-        path: String,
+        endpoint: String,
         method: String = "GET",
         query: [URLQueryItem] = [],
         body: Data? = nil
     ) async throws -> Data {
         try await ensureInitialized()
-        guard let baseURL = URL(string: path, relativeTo: messagesBase)?.absoluteURL else {
-            throw PrometheusMailError.invalidResponse
-        }
+        let baseURL = apiEndpoint(endpoint)
         var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false)
         if !query.isEmpty {
             components?.queryItems = query
+            // URLComponents leaves `+` unescaped; API form decoding treats it
+            // as a space, so escape it explicitly.
+            if let encoded = components?.percentEncodedQuery {
+                components?.percentEncodedQuery = encoded
+                    .replacingOccurrences(of: "+", with: "%2B")
+            }
         }
         var request = URLRequest(url: components?.url ?? baseURL)
         request.httpMethod = method
@@ -413,7 +503,7 @@ actor PrometheusMailClient: MailService {
     private func post(_ payload: PrometheusSendMessage, endpoint: String) async throws {
         let body = try JSONEncoder().encode(payload)
         _ = try await apiRequest(
-            path: "/\(tenant)\(endpoint)",
+            endpoint: endpoint,
             method: "POST",
             body: body
         )
@@ -423,39 +513,29 @@ actor PrometheusMailClient: MailService {
 
     private func seedCookies(_ snapshots: [CookieSnapshot], clearAll: Bool) {
         let storage = session.configuration.httpCookieStorage ?? .shared
-        if clearAll {
-            clearCookies(storage, hosts: [
-                "eduvulcan.pl",
-                "dziennik-logowanie.vulcan.net.pl",
-                "wiadomosci.eduvulcan.pl"
-            ])
-        } else {
-            // A fresh portal login has already replaced the portal cookies.
-            // Only clear stale SSO/mailbox cookies.
-            clearCookies(storage, hosts: [
-                "dziennik-logowanie.vulcan.net.pl",
-                "wiadomosci.eduvulcan.pl"
-            ])
-        }
-
-        let domains = [
-            "eduvulcan.pl",
+        var hosts = [
+            "uczen.eduvulcan.pl",
             "dziennik-logowanie.vulcan.net.pl",
             "wiadomosci.eduvulcan.pl"
         ]
+        if clearAll {
+            hosts.insert("eduvulcan.pl", at: 0)
+        }
+        clearCookies(storage, hosts: hosts)
+
         for snapshot in snapshots {
-            for domain in domains {
-                if let cookie = snapshot.cookie(for: domain) {
-                    storage.setCookie(cookie)
-                }
+            if let cookie = snapshot.cookie {
+                storage.setCookie(cookie)
             }
         }
     }
 
     private func clearCookies(_ storage: HTTPCookieStorage, hosts: [String]) {
         for cookie in storage.cookies ?? [] {
-            let domain = cookie.domain.lowercased()
-            if hosts.contains(where: { domain.contains($0) || $0.contains(domain) }) {
+            let domain = cookie.domain
+                .lowercased()
+                .trimmingCharacters(in: CharacterSet(charactersIn: "."))
+            if hosts.contains(where: { domain == $0 || domain.hasSuffix("." + $0) }) {
                 storage.deleteCookie(cookie)
             }
         }
@@ -486,14 +566,6 @@ actor PrometheusMailClient: MailService {
         return value.addingPercentEncoding(withAllowedCharacters: allowed) ?? value
     }
 
-    private static func token(_ name: String, in html: String) -> String? {
-        let pattern = "\(name)\\s*:\\s*['\"]([^'\"]+)['\"]"
-        guard let groups = LoginPage.firstMatch(html, pattern), groups.count > 1 else {
-            return nil
-        }
-        return groups[1].nilIfEmpty
-    }
-
     private static func absoluteURL(_ raw: String) -> URL? {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, let url = URL(string: trimmed) else { return nil }
@@ -507,6 +579,65 @@ actor PrometheusMailClient: MailService {
             return nil
         }
         return resolved
+    }
+}
+
+// MARK: - Session metadata
+
+/// Values embedded in the signed-in mailbox page (usually inside `VParam`).
+struct MailSessionMetadata: Equatable, Sendable {
+    let antiForgeryToken: String
+    let appGuid: String
+    let apiURL: URL?
+
+    var isComplete: Bool {
+        !antiForgeryToken.isEmpty && !appGuid.isEmpty
+    }
+
+    static func parse(_ html: String) -> MailSessionMetadata {
+        MailSessionMetadata(
+            antiForgeryToken: value("antiForgeryToken", in: html) ?? "",
+            appGuid: value("appGuid", in: html) ?? "",
+            apiURL: webURL(value("apiUrl", in: html))
+        )
+    }
+
+    /// The live page uses `antiForgeryToken: '...'`; other builds use `=`.
+    /// Accept both, with or without quotes around the key, and skip empty
+    /// placeholders that a template may render before the real value.
+    private static func value(_ name: String, in html: String) -> String? {
+        let pattern = #"["']?\b\#(name)\b["']?\s*[:=]\s*["']([^"']+)["']"#
+        guard let regex = try? NSRegularExpression(
+            pattern: pattern,
+            options: [.caseInsensitive, .dotMatchesLineSeparators]
+        ) else {
+            return nil
+        }
+
+        let text = html as NSString
+        let matches = regex.matches(
+            in: html,
+            range: NSRange(location: 0, length: text.length)
+        )
+        for match in matches {
+            let raw = text.substring(with: match.range(at: 1))
+            let decoded = HTMLEntities.decode(raw)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if !decoded.isEmpty {
+                return decoded
+            }
+        }
+        return nil
+    }
+
+    private static func webURL(_ raw: String?) -> URL? {
+        guard let raw,
+              let url = URL(string: raw),
+              let scheme = url.scheme?.lowercased(),
+              scheme == "https" || scheme == "http" else {
+            return nil
+        }
+        return url
     }
 }
 
