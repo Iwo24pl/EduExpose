@@ -409,24 +409,6 @@ actor PrometheusMailClient: MailService {
     /// of intermediate forms. Starting at the mailbox itself mirrors a browser:
     /// its redirect chain goes through the portal and ends at the app page.
     private func completeSSO() async throws {
-        // Diary first: the proven path to the real mailbox URL.
-        if let diaryURL = await diaryWiadomosciURL() {
-            do {
-                let page = try await followSSO(from: diaryURL)
-                if let metadata = mailboxMetadata(from: page) {
-                    apply(metadata)
-                    await trace(
-                        "metadata.ok",
-                        "via-diary api=\(metadata.apiURL.map(MailTraceRedaction.safeURL) ?? "-")"
-                    )
-                    return
-                }
-            } catch let error as PrometheusMailError {
-                await trace("sso.diary.entry.error", "\(String(describing: error))")
-            }
-        }
-        // The mailbox redirects through the portal by itself. The explicit SSO
-        // entry points remain as a fallback for older accounts.
         var entries = [appURL]
         if let postLoginURL {
             entries.append(postLoginURL)
@@ -455,6 +437,27 @@ actor PrometheusMailClient: MailService {
                 await trace("sso.entry.error", "\(String(describing: error))")
             }
         }
+
+        // Diary links last: the portal renders its journal tiles with JS, so
+        // this usually finds nothing, but it is the proven entry when it works.
+        if let diaryURL = await diaryWiadomosciURL() {
+            await trace("sso.entry", "diary \(MailTraceRedaction.safeURL(diaryURL))")
+            do {
+                let page = try await followSSO(from: diaryURL)
+                if let metadata = mailboxMetadata(from: page) {
+                    apply(metadata)
+                    await trace(
+                        "metadata.ok",
+                        "via-diary api=\(metadata.apiURL.map(MailTraceRedaction.safeURL) ?? "-")"
+                    )
+                    return
+                }
+            } catch let error as PrometheusMailError {
+                lastError = error
+                await trace("sso.diary.entry.error", "\(String(describing: error))")
+            }
+        }
+
         await trace("sso.failed", "\(String(describing: lastError))")
         throw lastError
     }
@@ -528,25 +531,41 @@ actor PrometheusMailClient: MailService {
     /// working JS client uses as the SSO entry; a constructed `fs/ls` URL does
     /// not carry an assertion and loops between the portal and the STS.
     static func journalTiles(in html: String, relativeTo base: URL) -> [JournalTile] {
-        guard let regex = try? NSRegularExpression(
-            pattern: #"<a\b[^>]*\bhref\s*=\s*["']([^"']+)["'][^>]*>([\s\S]*?)</a>"#,
-            options: [.caseInsensitive, .dotMatchesLineSeparators]
-        ) else {
-            return []
-        }
-
-        let text = html as NSString
         var tiles: [JournalTile] = []
         var seen = Set<String>()
-        for match in regex.matches(in: html, range: NSRange(location: 0, length: text.length)) {
-            let href = HTMLEntities.decode(text.substring(with: match.range(at: 1)))
-            let inner = text.substring(with: match.range(at: 2))
+        var searchStart = html.startIndex
+        while let start = html.range(
+            of: "<a",
+            options: [.caseInsensitive],
+            range: searchStart..<html.endIndex
+        )?.lowerBound {
+            let after = html.index(after: start)
+            guard after < html.endIndex, html[after].isWhitespace || html[after] == ">" else {
+                searchStart = html.index(after: start)
+                continue
+            }
+            guard let tagEnd = tagEnd(in: html, from: start),
+                  let closeRange = html.range(
+                    of: "</a>",
+                    options: [.caseInsensitive],
+                    range: tagEnd..<html.endIndex
+                  ) else {
+                break
+            }
+            let opening = String(html[start..<tagEnd])
+            let inner = String(html[tagEnd..<closeRange.lowerBound])
+            searchStart = closeRange.upperBound
+
+            guard let href = LoginPage.attribute(opening, "href"), !href.isEmpty else {
+                continue
+            }
+            let decodedHref = HTMLEntities.decode(href)
             let isTile = inner.range(
                 of: "connected-account-name",
                 options: .caseInsensitive
-            ) != nil || href.range(of: "/dziennik/", options: .caseInsensitive) != nil
+            ) != nil || decodedHref.range(of: "/dziennik/", options: .caseInsensitive) != nil
             guard isTile,
-                  let url = URL(string: href, relativeTo: base)?.absoluteURL,
+                  let url = URL(string: decodedHref, relativeTo: base)?.absoluteURL,
                   let scheme = url.scheme?.lowercased(),
                   scheme == "https" || scheme == "http",
                   seen.insert(url.absoluteString).inserted else {

@@ -33,49 +33,90 @@ struct HTMLForm: Sendable {
     }
 
     static func forms(in html: String) -> [HTMLForm] {
-        guard let regex = try? NSRegularExpression(
-            pattern: #"<form\b[^>]*>.*?</form>"#,
-            options: [.caseInsensitive, .dotMatchesLineSeparators]
-        ) else {
-            return []
+        var forms: [HTMLForm] = []
+        var searchStart = html.startIndex
+        while let start = html.range(
+            of: "<form",
+            options: [.caseInsensitive],
+            range: searchStart..<html.endIndex
+        )?.lowerBound {
+            let after = html.index(after: start)
+            guard after < html.endIndex, html[after].isWhitespace || html[after] == ">" else {
+                searchStart = html.index(after: start)
+                continue
+            }
+            guard let tagEnd = tagEnd(in: html, from: start),
+                  let closeRange = html.range(
+                    of: "</form>",
+                    options: [.caseInsensitive],
+                    range: tagEnd..<html.endIndex
+                  ) else {
+                break
+            }
+            forms.append(parse(
+                opening: String(html[start..<tagEnd]),
+                body: String(html[tagEnd..<closeRange.lowerBound])
+            ))
+            searchStart = closeRange.upperBound
         }
-
-        let text = html as NSString
-        return regex.matches(
-            in: html,
-            range: NSRange(location: 0, length: text.length)
-        ).map { match in
-            let form = text.substring(with: match.range)
-            return parse(form, action: LoginPage.attribute(form, "action") ?? "")
-        }
+        return forms
     }
 
-    private static func parse(_ form: String, action: String) -> HTMLForm {
+    private static func parse(opening: String, body: String) -> HTMLForm {
         var fields: [Field] = []
-        if let regex = try? NSRegularExpression(
-            pattern: #"<input\b[^>]*>"#,
-            options: [.caseInsensitive, .dotMatchesLineSeparators]
-        ) {
-            let nsForm = form as NSString
-            for match in regex.matches(
-                in: form,
-                range: NSRange(location: 0, length: nsForm.length)
-            ) {
-                let tag = nsForm.substring(with: match.range)
-                guard LoginPage.attribute(tag, "type")?.lowercased() == "hidden",
-                      let name = LoginPage.attribute(tag, "name"),
-                      !name.isEmpty else {
-                    continue
-                }
-                fields.append(Field(
-                    name: name,
-                    value: HTMLEntities.decode(LoginPage.attribute(tag, "value") ?? "")
-                ))
+        var searchStart = body.startIndex
+        while let start = body.range(
+            of: "<input",
+            options: [.caseInsensitive],
+            range: searchStart..<body.endIndex
+        )?.lowerBound {
+            let after = body.index(after: start)
+            guard after < body.endIndex, body[after].isWhitespace || body[after] == ">" else {
+                searchStart = body.index(after: start)
+                continue
             }
+            guard let tagEnd = tagEnd(in: body, from: start) else { break }
+            let tag = String(body[start..<tagEnd])
+            searchStart = tagEnd
+            guard LoginPage.attribute(tag, "type")?.lowercased() == "hidden",
+                  let name = LoginPage.attribute(tag, "name"),
+                  !name.isEmpty else {
+                continue
+            }
+            fields.append(Field(
+                name: name,
+                value: HTMLEntities.decode(LoginPage.attribute(tag, "value") ?? "")
+            ))
         }
 
-        let name = LoginPage.attribute(form, "name") ?? ""
-        return HTMLForm(action: HTMLEntities.decode(action), name: name, fields: fields)
+        return HTMLForm(
+            action: HTMLEntities.decode(LoginPage.attribute(opening, "action") ?? ""),
+            name: LoginPage.attribute(opening, "name") ?? "",
+            fields: fields
+        )
+    }
+
+    /// HTML5-ish tag end: `>` inside a quoted attribute value does not close the
+    /// tag. VULCAN's SAML `wresult` value contains raw `>` characters, so the
+    /// old `<input\b[^>]*>` pattern truncated the token, `value` had no closing
+    /// quote left, and the POST carried an empty assertion.
+    private static func tagEnd(in text: String, from tagStart: String.Index) -> String.Index? {
+        var quote: Character?
+        var index = text.index(after: tagStart)
+        while index < text.endIndex {
+            let character = text[index]
+            if let open = quote {
+                if character == open {
+                    quote = nil
+                }
+            } else if character == "\"" || character == "'" {
+                quote = character
+            } else if character == ">" {
+                return text.index(after: index)
+            }
+            index = text.index(after: index)
+        }
+        return nil
     }
 
     func url(relativeTo base: URL) -> URL? {

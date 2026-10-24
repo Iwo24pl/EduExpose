@@ -183,6 +183,46 @@ struct HTMLFormTests {
     }
 }
 
+struct WSFedFormTests {
+    /// The live `fs/ls` page escapes `<` and `"` but leaves `>` raw inside the
+    /// SAML token, so the value's closing quote sits kilobytes past the first `>`.
+    private let token = """
+    &lt;trust:RequestSecurityTokenResponseCollection xmlns:trust=&quot;http://docs.oasis-open.org/ws-sx/ws-trust/200512&quot;>&lt;trust:RequestSecurityTokenResponse Context=&quot;nslo=1&quot;>&lt;saml:Assertion MajorVersion=&quot;1&quot; AssertionID=&quot;_abc-123&quot; Issuer=&quot;PrometeuszSecurityTokenService&quot; xmlns:saml=&quot;urn:oasis:names:tc:SAML:1.0:assertion&quot;>&lt;saml:Conditions>&lt;/saml:Conditions>&lt;/saml:Assertion>&lt;/trust:RequestSecurityTokenResponse>&lt;/trust:RequestSecurityTokenResponseCollection>
+    """
+
+    private let page = """
+    <html><head><title>Working...</title></head><body>
+    <form method="POST" name="hiddenform" action="https://dziennik-logowanie.vulcan.net.pl/katowice/Fs/Ls?wa=wsignin1.0">
+    <input type="hidden" name="wa" value="wsignin1.0" />
+    <input type="hidden" name="wresult" value="\(token)" />
+    <input type="hidden" name="wctx" value="nslo=1" />
+    </form></body></html>
+    """
+
+    @Test("Reads the WS-Fed token even though its value contains a raw '>'")
+    func readsTokenWithRawGreaterThan() throws {
+        let form = try #require(HTMLForm.sso(in: page))
+
+        #expect(form.name == "hiddenform")
+        #expect(form.fields.count == 3)
+        let wresult = try #require(form.fields.first { $0.name == "wresult" })
+        #expect(wresult.value.hasPrefix("<trust:RequestSecurityTokenResponseCollection"))
+        #expect(wresult.value.hasSuffix("</trust:RequestSecurityTokenResponseCollection>"))
+        #expect(wresult.value.contains("<saml:Assertion"))
+    }
+
+    @Test("Posts the decoded token exactly like a browser")
+    func postsDecodedToken() throws {
+        let form = try #require(HTMLForm.sso(in: page))
+        let body = String(decoding: form.body, as: UTF8.self)
+
+        #expect(body.contains("wa=wsignin1.0"))
+        #expect(body.contains("wctx=nslo%3D1"))
+        #expect(body.contains("wresult=%3Ctrust%3ARequestSecurityTokenResponseCollection"))
+        #expect(body.contains("Context%3D%22nslo%3D1%22"))
+    }
+}
+
 struct PrometheusPayloadTests {
     @Test("Decodes the message list payload")
     func decodesMessageList() throws {
