@@ -868,8 +868,16 @@ private struct ComposeMessageView: View {
         let exact = loaded.filter { context.replyNames.contains($0.name) }
         let candidates: [MailContact]
         if exact.isEmpty {
-            let names = context.replyNames.map { VulcanMailboxName.parse($0)?.name ?? $0 }
-            candidates = loaded.filter { names.contains($0.displayName) }
+            // Only an unambiguous display-name match is safe to prefill.
+            var resolved: [MailContact] = []
+            for raw in context.replyNames {
+                let name = VulcanMailboxName.parse(raw)?.name ?? raw
+                let matches = loaded.filter { $0.displayName == name }
+                if matches.count == 1 {
+                    resolved.append(matches[0])
+                }
+            }
+            candidates = resolved
         } else {
             candidates = exact
         }

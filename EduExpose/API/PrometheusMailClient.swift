@@ -917,7 +917,7 @@ actor PrometheusMailClient: MailService {
         try JSONDecoder().decode([PrometheusContactDTO].self, from: data).map { item in
             MailContact(
                 globalKey: item.skrzynkaGlobalKey,
-                name: item.nazwa,
+                name: HTMLEntities.decode(item.nazwa),
                 role: role
             )
         }
