@@ -274,6 +274,50 @@ struct CookieSnapshotTests {
     }
 }
 
+struct JournalLinkTests {
+    private let portalHome = """
+    <div class="connected-accounts">
+      <a href="/dziennik/NB2HI4DT"><span class="connected-account-name">Jan Kowalski</span><span>SP 1</span></a>
+      <a href="https://eduvulcan.pl/dziennik/ZZZ"><span class="connected-account-name">Anna Kowalska</span></a>
+    </div>
+    """
+
+    @Test("Finds the portal journal tiles and picks the pupil")
+    func picksJournalForPupil() throws {
+        let base = try #require(URL(string: "https://eduvulcan.pl/"))
+        let tiles = PrometheusMailClient.journalTiles(in: portalHome, relativeTo: base)
+
+        #expect(tiles.count == 2)
+        let picked = try #require(
+            PrometheusMailClient.pickJournal(tiles, firstName: "Jan", surname: "Kowalski")
+        )
+        #expect(picked.url.absoluteString == "https://eduvulcan.pl/dziennik/NB2HI4DT")
+        #expect(picked.name.contains("Jan Kowalski"))
+    }
+
+    @Test("Uses the only tile when the name does not match")
+    func fallsBackToSingleTile() throws {
+        let base = try #require(URL(string: "https://eduvulcan.pl/"))
+        let html = #"<a href="/dziennik/ONE"><span class="connected-account-name">Someone Else</span></a>"#
+        let tiles = PrometheusMailClient.journalTiles(in: html, relativeTo: base)
+        let picked = try #require(
+            PrometheusMailClient.pickJournal(tiles, firstName: "Jan", surname: "Kowalski")
+        )
+
+        #expect(picked.url.absoluteString == "https://eduvulcan.pl/dziennik/ONE")
+    }
+
+    @Test("Does not guess when several tiles and none match")
+    func refusesAmbiguousJournal() throws {
+        let base = try #require(URL(string: "https://eduvulcan.pl/"))
+        let tiles = PrometheusMailClient.journalTiles(in: portalHome, relativeTo: base)
+
+        #expect(
+            PrometheusMailClient.pickJournal(tiles, firstName: "Piotr", surname: "Nowak") == nil
+        )
+    }
+}
+
 struct MailTraceRedactionTests {
     @Test("Trace URLs keep the path but drop query values")
     func redactsURLQuery() throws {
@@ -297,6 +341,23 @@ struct MailTraceRedactionTests {
         #expect(!head.contains("secret-token"))
         #expect(!head.contains("secret-guid"))
         #expect(head.contains("<redacted>"))
+    }
+
+    @Test("Detects a real WS-Fed token in a page")
+    func detectsWresultToken() {
+        let token = String(repeating: "A", count: 120)
+        let html = "<form><input type=\"hidden\" name=\"wresult\" value=\"\(token)\"></form>"
+
+        #expect(MailTraceRedaction.wresultShape(html).contains("longValue=true"))
+    }
+
+    @Test("Detects a tokenless WS-Fed placeholder")
+    func detectsEmptyWresult() {
+        let html = #"<form><input type="hidden" name="wresult" value=""></form>"#
+        let shape = MailTraceRedaction.wresultShape(html)
+
+        #expect(shape.contains("wresult=present"))
+        #expect(shape.contains("longValue=false"))
     }
 }
 
@@ -325,6 +386,21 @@ struct MailSessionMetadataTests {
         #expect(metadata.isComplete)
         #expect(metadata.appGuid == "guid-value")
         #expect(metadata.antiForgeryToken == "token-value")
+    }
+
+    @Test("Resolves a relative mailbox URL against the diary page")
+    func resolvesRelativeMailboxURL() throws {
+        let html = """
+        <script>var VParam = { antiForgeryToken: 't', appGuid: 'g',
+          wiadomosciUrl: '/katowice/App' };</script>
+        """
+        let base = try #require(URL(string: "https://uczen.eduvulcan.pl/"))
+        let metadata = MailSessionMetadata.parse(html, baseURL: base)
+
+        #expect(
+            metadata.wiadomosciURL?.absoluteString
+                == "https://uczen.eduvulcan.pl/katowice/App"
+        )
     }
 
     @Test("Parses VParam JSON including wiadomosciUrl")

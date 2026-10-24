@@ -54,6 +54,25 @@ enum MailTraceRedaction {
         return names.isEmpty ? base : "\(base)?[\(names.joined(separator: ","))]"
     }
 
+    /// Tells us whether a WS-Fed page carries its token in the HTML or only has
+    /// an empty placeholder that JavaScript fills later. This distinguishes a
+    /// parser bug from a page that cannot be completed without a browser.
+    static func wresultShape(_ html: String) -> String {
+        guard let range = html.range(of: "wresult", options: [.caseInsensitive]) else {
+            return "wresult=absent"
+        }
+        let tail = String(html[range.upperBound...].prefix(600))
+        let longValue = tail.range(
+            of: #"value\s*=\s*["'][^"']{50,}"#,
+            options: [.regularExpression, .caseInsensitive]
+        ) != nil
+        let scriptMentions = html.range(
+            of: #"(?is)<script\b[^>]*>[\s\S]{0,6000}?wresult"#,
+            options: [.regularExpression]
+        ) != nil
+        return "wresult=present longValue=\(longValue) scriptMentions=\(scriptMentions)"
+    }
+
     /// A short failure snippet with token values removed.
     static func htmlHead(_ html: String, limit: Int = 2048) -> String {
         var text = String(html.prefix(limit))

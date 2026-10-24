@@ -473,27 +473,44 @@ actor PrometheusMailClient: MailService {
             do {
                 let page = try await getHTML(source)
                 await trace("sso.diary.access", MailTraceRedaction.safeURL(page.url))
-                guard let journal = Self.diaryLink(in: page.html, relativeTo: page.url) else {
+                let tiles = Self.journalTiles(in: page.html, relativeTo: page.url)
+                await trace(
+                    "sso.diary.tiles",
+                    "\(MailTraceRedaction.safeURL(page.url)) count=\(tiles.count)"
+                )
+                guard let journal = Self.pickJournal(
+                    tiles,
+                    firstName: pupilFirstName,
+                    surname: pupilSurname
+                ) else {
                     await trace("sso.diary.nolink", MailTraceRedaction.safeURL(page.url))
                     continue
                 }
-                await trace("sso.diary.journal", MailTraceRedaction.safeURL(journal))
-                var current = try await getHTML(journal)
+                await trace("sso.diary.journal", MailTraceRedaction.safeURL(journal.url))
+                var current = try await getHTML(journal.url)
                 var visited = Set<String>()
-                for _ in 0..<2 {
+                for _ in 0..<4 {
                     let signature = "\(current.url.absoluteString)|\(current.html.count)"
                     guard visited.insert(signature).inserted else { break }
-                    guard let form = HTMLForm.hiddenform(in: current.html) ?? HTMLForm.sso(in: current.html) else {
+                    guard let form = HTMLForm.hiddenform(in: current.html)
+                        ?? HTMLForm.sso(in: current.html) else {
                         break
                     }
+                    await trace(
+                        "sso.diary.form",
+                        "\(MailTraceRedaction.safeURL(current.url))\(form.fieldShape)"
+                    )
                     current = try await submit(form, relativeTo: current.url)
                 }
-                let metadata = MailSessionMetadata.parse(current.html)
+                let metadata = MailSessionMetadata.parse(current.html, baseURL: current.url)
                 if let url = metadata.wiadomosciURL {
                     await trace("sso.diary.wiadomosci", MailTraceRedaction.safeURL(url))
                     return url
                 }
-                await trace("sso.diary.novparam", "\(MailTraceRedaction.safeURL(current.url)) head=\(MailTraceRedaction.htmlHead(current.html))")
+                await trace(
+                    "sso.diary.novparam",
+                    "\(MailTraceRedaction.safeURL(current.url)) tokens=\(metadata.isComplete) head=\(MailTraceRedaction.htmlHead(current.html))"
+                )
             } catch {
                 await trace("sso.diary.error", "\(String(describing: error))")
             }
@@ -501,25 +518,74 @@ actor PrometheusMailClient: MailService {
         return nil
     }
 
-    /// Only diary hosts count. A link containing the word `dziennik` is usually
-    /// this very page, and following it used to loop back to the marketing site.
-    private static func diaryLink(in html: String, relativeTo base: URL) -> URL? {
+    struct JournalTile {
+        let url: URL
+        let name: String
+    }
+
+    /// The signed-in portal home lists each child's diary as a
+    /// `.connected-account-name` anchor. Its href is the journal short link the
+    /// working JS client uses as the SSO entry; a constructed `fs/ls` URL does
+    /// not carry an assertion and loops between the portal and the STS.
+    static func journalTiles(in html: String, relativeTo base: URL) -> [JournalTile] {
         guard let regex = try? NSRegularExpression(
-            pattern: #"<a\b[^>]*\bhref\s*=\s*"([^"]+)"[^>]*>"#,
+            pattern: #"<a\b[^>]*\bhref\s*=\s*["']([^"']+)["'][^>]*>([\s\S]*?)</a>"#,
             options: [.caseInsensitive, .dotMatchesLineSeparators]
         ) else {
-            return nil
+            return []
         }
+
         let text = html as NSString
+        var tiles: [JournalTile] = []
+        var seen = Set<String>()
         for match in regex.matches(in: html, range: NSRange(location: 0, length: text.length)) {
             let href = HTMLEntities.decode(text.substring(with: match.range(at: 1)))
-            guard let resolved = URL(string: href, relativeTo: base)?.absoluteURL else { continue }
-            let host = resolved.host?.lowercased() ?? ""
-            if host.hasPrefix("uczen.") {
-                return resolved
+            let inner = text.substring(with: match.range(at: 2))
+            let isTile = inner.range(
+                of: "connected-account-name",
+                options: .caseInsensitive
+            ) != nil || href.range(of: "/dziennik/", options: .caseInsensitive) != nil
+            guard isTile,
+                  let url = URL(string: href, relativeTo: base)?.absoluteURL,
+                  let scheme = url.scheme?.lowercased(),
+                  scheme == "https" || scheme == "http",
+                  seen.insert(url.absoluteString).inserted else {
+                continue
             }
+            tiles.append(JournalTile(url: url, name: taglessText(inner)))
         }
-        return nil
+        return tiles
+    }
+
+    static func pickJournal(
+        _ tiles: [JournalTile],
+        firstName: String,
+        surname: String
+    ) -> JournalTile? {
+        guard !tiles.isEmpty else { return nil }
+        let matching = tiles.filter {
+            VulcanMailboxName.containsWord(firstName, in: $0.name)
+                && VulcanMailboxName.containsWord(surname, in: $0.name)
+        }
+        if matching.count == 1 {
+            return matching[0]
+        }
+        if tiles.count == 1 {
+            return tiles[0]
+        }
+        return matching.first
+    }
+
+    private static func taglessText(_ html: String) -> String {
+        HTMLEntities.decode(
+            html.replacingOccurrences(
+                of: #"<[^>]+>"#,
+                with: " ",
+                options: .regularExpression
+            )
+        )
+        .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+        .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func followSSO(from url: URL) async throws -> (html: String, url: URL) {
@@ -533,16 +599,17 @@ actor PrometheusMailClient: MailService {
                 // only burns requests and hides the cause.
                 await trace(
                     "sso.loop",
-                    "\(MailTraceRedaction.safeURL(page.url)) bytes=\(page.html.count) cookies=\(cookieNames(hostSuffix: "vulcan.net.pl").joined(separator: ","))"
+                    "\(MailTraceRedaction.safeURL(page.url)) bytes=\(page.html.count) cookies=\(cookieNames(hostSuffix: "vulcan.net.pl").joined(separator: ",")) head=\(MailTraceRedaction.htmlHead(page.html))"
                 )
                 return page
             }
-            let metadata = MailSessionMetadata.parse(page.html)
+            let metadata = MailSessionMetadata.parse(page.html, baseURL: page.url)
             let form = HTMLForm.sso(in: page.html)
             let forms = HTMLForm.forms(in: page.html).count
+            let formShape = form == nil ? "" : " \(MailTraceRedaction.wresultShape(page.html))"
             await trace(
                 "sso.page",
-                "\(MailTraceRedaction.safeURL(page.url)) forms=\(forms) ssoForm=\(form != nil) name=\(form?.name ?? "-") action=\(form.map { MailTraceRedaction.safeURL($0.url(relativeTo: page.url) ?? page.url) } ?? "-") tokens=\(metadata.isComplete) bytes=\(page.html.count)"
+                "\(MailTraceRedaction.safeURL(page.url)) forms=\(forms) ssoForm=\(form != nil) name=\(form?.name ?? "-") action=\(form.map { MailTraceRedaction.safeURL($0.url(relativeTo: page.url) ?? page.url) } ?? "-") tokens=\(metadata.isComplete) bytes=\(page.html.count)\(formShape)"
             )
             if mailboxMetadata(from: page) != nil {
                 return page
@@ -578,7 +645,7 @@ actor PrometheusMailClient: MailService {
     /// The student app also embeds `antiForgeryToken`/`appGuid`; those must not
     /// be mistaken for the mailbox session, so require a mailbox host or apiUrl.
     private func mailboxMetadata(from page: (html: String, url: URL)) -> MailSessionMetadata? {
-        let metadata = MailSessionMetadata.parse(page.html)
+        let metadata = MailSessionMetadata.parse(page.html, baseURL: page.url)
         guard metadata.isComplete else { return nil }
         let pageHost = page.url.host?.lowercased() ?? ""
         let apiHost = metadata.apiURL?.host?.lowercased() ?? ""
@@ -854,21 +921,24 @@ struct MailSessionMetadata: Equatable, Sendable {
         !antiForgeryToken.isEmpty && !appGuid.isEmpty
     }
 
-    static func parse(_ html: String) -> MailSessionMetadata {
-        if let vparam = parseVParamJSON(html) {
+    static func parse(_ html: String, baseURL: URL? = nil) -> MailSessionMetadata {
+        if let vparam = parseVParamJSON(html, baseURL: baseURL) {
             return vparam
         }
         return MailSessionMetadata(
             antiForgeryToken: value("antiForgeryToken", in: html) ?? "",
             appGuid: value("appGuid", in: html) ?? "",
-            apiURL: webURL(value("apiUrl", in: html)),
-            wiadomosciURL: webURL(value("wiadomosciUrl", in: html))
+            apiURL: webURL(value("apiUrl", in: html), relativeTo: baseURL),
+            wiadomosciURL: webURL(value("wiadomosciUrl", in: html), relativeTo: baseURL)
         )
     }
 
     /// The proven clients parse `var VParam = {...};` as JSON. Prefer that over
     /// per-token regexes; it also yields `wiadomosciUrl` and `apiUrl` exactly.
-    private static func parseVParamJSON(_ html: String) -> MailSessionMetadata? {
+    private static func parseVParamJSON(
+        _ html: String,
+        baseURL: URL?
+    ) -> MailSessionMetadata? {
         let pattern = #"var\s+VParam\s*=\s*(\{.*?\});"#
         guard let regex = try? NSRegularExpression(
             pattern: pattern,
@@ -914,8 +984,8 @@ struct MailSessionMetadata: Equatable, Sendable {
         return MailSessionMetadata(
             antiForgeryToken: token,
             appGuid: guid,
-            apiURL: webURL(string("apiUrl")),
-            wiadomosciURL: webURL(string("wiadomosciUrl"))
+            apiURL: webURL(string("apiUrl"), relativeTo: baseURL),
+            wiadomosciURL: webURL(string("wiadomosciUrl"), relativeTo: baseURL)
         )
     }
 
@@ -947,9 +1017,15 @@ struct MailSessionMetadata: Equatable, Sendable {
         return nil
     }
 
-    private static func webURL(_ raw: String?) -> URL? {
-        guard let raw,
-              let url = URL(string: raw),
+    private static func webURL(_ raw: String?, relativeTo base: URL? = nil) -> URL? {
+        guard let raw, !raw.isEmpty else { return nil }
+        if let url = URL(string: raw),
+           let scheme = url.scheme?.lowercased(),
+           scheme == "https" || scheme == "http" {
+            return url
+        }
+        guard let base,
+              let url = URL(string: raw, relativeTo: base)?.absoluteURL,
               let scheme = url.scheme?.lowercased(),
               scheme == "https" || scheme == "http" else {
             return nil
