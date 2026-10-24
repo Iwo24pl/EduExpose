@@ -210,7 +210,6 @@ private struct GradeDetailSheet: View {
                 }
                 .padding(20)
             }
-            .background(ScreenBackground())
             .navigationTitle("Szczegóły oceny")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -220,6 +219,7 @@ private struct GradeDetailSheet: View {
             }
         }
         .presentationDetents([.medium, .large])
+        .presentationBackground(.thinMaterial)
         .presentationDragIndicator(.visible)
     }
 
