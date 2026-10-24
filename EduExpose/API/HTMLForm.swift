@@ -40,8 +40,7 @@ struct HTMLForm: Sendable {
             options: [.caseInsensitive],
             range: searchStart..<html.endIndex
         )?.lowerBound {
-            let after = html.index(after: start)
-            guard after < html.endIndex, html[after].isWhitespace || html[after] == ">" else {
+            guard isTag("form", at: start, in: html) else {
                 searchStart = html.index(after: start)
                 continue
             }
@@ -70,8 +69,7 @@ struct HTMLForm: Sendable {
             options: [.caseInsensitive],
             range: searchStart..<body.endIndex
         )?.lowerBound {
-            let after = body.index(after: start)
-            guard after < body.endIndex, body[after].isWhitespace || body[after] == ">" else {
+            guard isTag("input", at: start, in: body) else {
                 searchStart = body.index(after: start)
                 continue
             }
@@ -94,6 +92,21 @@ struct HTMLForm: Sendable {
             name: LoginPage.attribute(opening, "name") ?? "",
             fields: fields
         )
+    }
+
+    /// True when the tag beginning at `tagStart` (`<`) is exactly `name`: the
+    /// character after the name ends it (`<a>`, `<a href=…>`, `<a/>`) instead of
+    /// continuing it (`<article>`, `<area>`, `<formdata>`).
+    static func isTag(_ name: String, at tagStart: String.Index, in text: String) -> Bool {
+        guard let boundary = text.index(
+            tagStart,
+            offsetBy: name.count + 1,
+            limitedBy: text.endIndex
+        ), boundary < text.endIndex else {
+            return false
+        }
+        let character = text[boundary]
+        return character.isWhitespace || character == ">" || character == "/"
     }
 
     /// HTML5-ish tag end: `>` inside a quoted attribute value does not close the

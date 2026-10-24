@@ -181,6 +181,19 @@ struct HTMLFormTests {
 
         #expect(form.action == "https://uczen.eduvulcan.pl/krakow/Start")
     }
+
+    @Test("Ignores tag names that merely start with <form or <input")
+    func ignoresLongerTagNames() throws {
+        let html = """
+        <formdata action="/no"><inputx type="hidden" name="x" value="1"></formdata>
+        <form action="/yes"><input type="hidden" name="kept" value="1"><inputx type="hidden" name="dropped" value="2"></form>
+        """
+
+        let form = try #require(HTMLForm.first(in: html))
+
+        #expect(form.action == "/yes")
+        #expect(form.fields.map(\.name) == ["kept"])
+    }
 }
 
 struct WSFedFormTests {
@@ -357,6 +370,15 @@ struct JournalLinkTests {
         #expect(
             PrometheusMailClient.pickJournal(tiles, firstName: "Piotr", surname: "Nowak") == nil
         )
+    }
+
+    @Test("Ignores elements that only start with <a, such as <area>")
+    func ignoresLongerAnchorTagNames() throws {
+        let html = #"<area href="/dziennik/B"><a href="/dziennik/C"><span class="connected-account-name">Jan Kowalski</span></a>"#
+        let base = try #require(URL(string: "https://eduvulcan.pl/"))
+        let tiles = PrometheusMailClient.journalTiles(in: html, relativeTo: base)
+
+        #expect(tiles.map(\.url.absoluteString) == ["https://eduvulcan.pl/dziennik/C"])
     }
 }
 

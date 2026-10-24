@@ -539,8 +539,7 @@ actor PrometheusMailClient: MailService {
             options: [.caseInsensitive],
             range: searchStart..<html.endIndex
         )?.lowerBound {
-            let after = html.index(after: start)
-            guard after < html.endIndex, html[after].isWhitespace || html[after] == ">" else {
+            guard HTMLForm.isTag("a", at: start, in: html) else {
                 searchStart = html.index(after: start)
                 continue
             }
