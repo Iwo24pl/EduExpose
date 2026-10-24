@@ -544,16 +544,16 @@ actor PrometheusMailClient: MailService {
                 searchStart = html.index(after: start)
                 continue
             }
-            guard let tagEnd = tagEnd(in: html, from: start),
+            guard let end = HTMLForm.tagEnd(in: html, from: start),
                   let closeRange = html.range(
                     of: "</a>",
                     options: [.caseInsensitive],
-                    range: tagEnd..<html.endIndex
+                    range: end..<html.endIndex
                   ) else {
                 break
             }
-            let opening = String(html[start..<tagEnd])
-            let inner = String(html[tagEnd..<closeRange.lowerBound])
+            let opening = String(html[start..<end])
+            let inner = String(html[end..<closeRange.lowerBound])
             searchStart = closeRange.upperBound
 
             guard let href = LoginPage.attribute(opening, "href"), !href.isEmpty else {

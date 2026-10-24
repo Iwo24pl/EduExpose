@@ -100,7 +100,7 @@ struct HTMLForm: Sendable {
     /// tag. VULCAN's SAML `wresult` value contains raw `>` characters, so the
     /// old `<input\b[^>]*>` pattern truncated the token, `value` had no closing
     /// quote left, and the POST carried an empty assertion.
-    private static func tagEnd(in text: String, from tagStart: String.Index) -> String.Index? {
+    static func tagEnd(in text: String, from tagStart: String.Index) -> String.Index? {
         var quote: Character?
         var index = text.index(after: tagStart)
         while index < text.endIndex {
