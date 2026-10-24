@@ -482,3 +482,117 @@ struct MailSessionMetadataTests {
         #expect(metadata.wiadomosciURL?.absoluteString == "https://wiadomosci.eduvulcan.pl/krakow/App")
     }
 }
+
+// MARK: - Address book and deletion
+
+struct MailContactTests {
+    @Test("Decodes an address-book page and derives the display name")
+    func decodesContacts() throws {
+        let json = """
+        [{"skrzynkaGlobalKey": "teacher-key", "nazwa": "Natalia Wrzesień - P - (SP 1)"}]
+        """
+
+        let contacts = try PrometheusMailClient.decodeContacts(
+            Data(json.utf8),
+            role: .employee
+        )
+
+        #expect(contacts.count == 1)
+        #expect(contacts[0].globalKey == "teacher-key")
+        #expect(contacts[0].role == .employee)
+        #expect(contacts[0].displayName == "Natalia Wrzesień")
+        #expect(contacts[0].school == "SP 1")
+        #expect(contacts[0].detail == "SP 1")
+    }
+
+    @Test("Accepts the alternate key and name spellings")
+    func decodesAlternateSpellings() throws {
+        let json = #"[{"globalKey": "student-key", "name": "Jan Kowalski - U - (SP 2)"}]"#
+
+        let contacts = try PrometheusMailClient.decodeContacts(
+            Data(json.utf8),
+            role: .student
+        )
+
+        #expect(contacts.first?.globalKey == "student-key")
+        #expect(contacts.first?.displayName == "Jan Kowalski")
+        #expect(contacts.first?.school == "SP 2")
+    }
+
+    @Test("Keeps the role in the contact identity")
+    func keepsRoleInIdentity() {
+        let employee = MailContact(
+            globalKey: "same-key",
+            name: "Jan Kowalski - P - (SP 1)",
+            role: .employee
+        )
+        let parent = MailContact(
+            globalKey: "same-key",
+            name: "Jan Kowalski - R - (SP 1)",
+            role: .guardian
+        )
+
+        #expect(employee.id != parent.id)
+        #expect(MailContactRole.role(inName: parent.name) == .guardian)
+        #expect(MailContactRole.role(inName: "Anna Nowak - O - (SP 1)") == .guardian)
+    }
+
+    @Test("Groups the directories under Polish titles")
+    func groupsByRole() {
+        #expect(
+            MailContactRole.allCases.map(\.groupTitle)
+                == ["Nauczyciele", "Rodzice", "Uczniowie"]
+        )
+    }
+
+    @Test("Picks the pupil's own mailbox for the default sender")
+    func picksPupilMailbox() {
+        let boxes = [
+            Mailbox(globalKey: "parent", name: "Anna Kowalska - R - (SP 1)", type: 2),
+            Mailbox(globalKey: "pupil", name: "Jan Kowalski - U - (SP 1)", type: 1)
+        ]
+
+        let match = VulcanMailboxName.bestMatch(
+            in: boxes,
+            firstName: "Jan",
+            surname: "Kowalski"
+        )
+
+        #expect(match?.globalKey == "pupil")
+    }
+
+    @Test("Decodes the reply participants with their mailbox keys")
+    func decodesReplyParticipants() throws {
+        let json = """
+        {"nadawcaSkrzynkaGlobalKey": "sender-key",
+         "nadawcaSkrzynkaNazwa": "Natalia Wrzesień - P - (SP 1)",
+         "adresaci": [
+           {"skrzynkaGlobalKey": "parent-key", "nazwa": "Anna Kowalska - R - (SP 1)"}
+         ]}
+        """
+
+        let dto = try JSONDecoder().decode(
+            PrometheusReplyDTO.self,
+            from: Data(json.utf8)
+        )
+
+        #expect(dto.nadawcaSkrzynkaGlobalKey == "sender-key")
+        #expect(dto.adresaci?.first?.skrzynkaGlobalKey == "parent-key")
+    }
+}
+
+struct MailDeletionTests {
+    @Test("Moves to trash first and deletes permanently only from the trash")
+    func choosesDeleteEndpoint() {
+        #expect(PrometheusDeletion.endpoint(permanently: false) == "MoveTrash")
+        #expect(PrometheusDeletion.endpoint(permanently: true) == "Delete")
+    }
+
+    @Test("Sends the message keys as a JSON array")
+    func encodesDeleteBody() throws {
+        let data = try PrometheusDeletion.body(id: "abc")
+        let keys = try JSONSerialization.jsonObject(with: data) as? [String]
+
+        #expect(keys == ["abc"])
+    }
+}

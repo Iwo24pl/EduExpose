@@ -19,6 +19,8 @@ na iOS 26+, z Liquid Glass i bez pozostałości Kotlina.
 
 - [x] wiadomości z Prometheus dla kont nie-Hebe, z fallbackiem odczytu Hebe
 - [x] wysyłanie, odpowiedź i przekazywanie wiadomości tekstowych
+- [x] książka adresowa (Pracownicy/Opiekunowie/Uczniowie) i wybór „Od:”
+- [x] usuwanie wiadomości: do kosza, a z kosza trwale
 - [x] ciemny granatowy motyw, ikona aplikacji i ekran startowy z logo
 - [ ] załączniki w wysyłanych wiadomościach
 - [ ] weryfikacja live payloadów wysyłki na koncie produkcyjnym

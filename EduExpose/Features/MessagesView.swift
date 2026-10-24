@@ -10,6 +10,10 @@ struct MessagesView: View {
     @State private var canSend = false
     @State private var isLoading = false
     @State private var error: String?
+    @State private var actionError: String?
+    @State private var pendingPermanentDelete: MailMessage?
+    @State private var isConfirmingPermanentDelete = false
+    @State private var deletingIDs: Set<String> = []
     @State private var loadGeneration = 0
 
     /// One presentation slot: two `.sheet` modifiers on the same view only
@@ -28,36 +32,27 @@ struct MessagesView: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    Picker("Skrzynka", selection: $kind) {
-                        ForEach(MessageKind.allCases) { item in
-                            Text(item.rawValue).tag(item)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-
-                    if let message = model.errorMessage {
-                        ErrorBanner(message: message)
-                    }
-
-                    if isLoading && messages.isEmpty {
-                        LoadingView()
-                    } else if let error {
-                        ErrorStateView(message: error) {
-                            Task { await load() }
-                        }
-                    } else if messages.isEmpty {
-                        EmptyStateView(
-                            icon: "envelope",
-                            title: "Brak wiadomości",
-                            message: emptyMessage
-                        )
-                    } else {
-                        list
+            VStack(spacing: 12) {
+                Picker("Skrzynka", selection: $kind) {
+                    ForEach(MessageKind.allCases) { item in
+                        Text(item.rawValue).tag(item)
                     }
                 }
-                .padding(20)
+                .pickerStyle(.segmented)
+                .padding(.horizontal, 20)
+                .padding(.top, 4)
+
+                if let message = model.errorMessage {
+                    ErrorBanner(message: message)
+                        .padding(.horizontal, 20)
+                }
+
+                if let actionError {
+                    ErrorBanner(message: actionError)
+                        .padding(.horizontal, 20)
+                }
+
+                content
             }
             .background(ScreenBackground())
             .navigationTitle("Wiadomości")
@@ -74,12 +69,12 @@ struct MessagesView: View {
                     .accessibilityLabel("Nowa wiadomość")
                 }
             }
-            .refreshable { await load() }
             .task(id: model.activeID) {
                 // Never show the previous pupil's mail while the new one loads.
                 messages = []
                 locallyRead = []
                 error = nil
+                actionError = nil
                 await loadCapabilities()
                 guard !Task.isCancelled else { return }
                 await load()
@@ -87,7 +82,20 @@ struct MessagesView: View {
             .onChange(of: kind) { _, _ in
                 messages = []
                 error = nil
+                actionError = nil
                 Task { await load() }
+            }
+            .confirmationDialog(
+                "Usunąć wiadomość trwale?",
+                isPresented: $isConfirmingPermanentDelete,
+                presenting: pendingPermanentDelete
+            ) { message in
+                Button("Usuń trwale", role: .destructive) {
+                    Task { await delete(message, permanently: true) }
+                }
+                Button("Anuluj", role: .cancel) {}
+            } message: { message in
+                Text("„\(message.subject)” zostanie usunięta bez możliwości przywrócenia.")
             }
             .sheet(item: $sheet, onDismiss: { Task { await load() } }) { item in
                 switch item {
@@ -97,12 +105,46 @@ struct MessagesView: View {
                         kind: kind,
                         mailboxes: mailboxes,
                         canSend: canSend,
-                        onRead: { id in _ = locallyRead.insert(id) }
+                        onRead: { id in _ = locallyRead.insert(id) },
+                        onDelete: { id in
+                            withAnimation { messages.removeAll { $0.id == id } }
+                        }
                     )
                 case .compose(let context):
                     ComposeMessageView(context: context, mailboxes: mailboxes)
                 }
             }
+        }
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        if isLoading && messages.isEmpty {
+            ScrollView {
+                LoadingView()
+                    .padding(20)
+            }
+            .refreshable { await load() }
+        } else if let error {
+            ScrollView {
+                ErrorStateView(message: error) {
+                    Task { await load() }
+                }
+                .padding(20)
+            }
+            .refreshable { await load() }
+        } else if messages.isEmpty {
+            ScrollView {
+                EmptyStateView(
+                    icon: "envelope",
+                    title: "Brak wiadomości",
+                    message: emptyMessage
+                )
+                .padding(20)
+            }
+            .refreshable { await load() }
+        } else {
+            list
         }
     }
 
@@ -115,7 +157,7 @@ struct MessagesView: View {
     }
 
     private var list: some View {
-        VStack(spacing: 10) {
+        List {
             ForEach(messages) { message in
                 Button {
                     sheet = .detail(message)
@@ -123,8 +165,27 @@ struct MessagesView: View {
                     messageRow(message)
                 }
                 .buttonStyle(.plain)
+                .listRowInsets(EdgeInsets(top: 5, leading: 20, bottom: 5, trailing: 20))
+                .listRowSeparator(.hidden)
+                .listRowBackground(Color.clear)
+                .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                    if canSend {
+                        Button(role: .destructive) {
+                            requestDelete(message)
+                        } label: {
+                            Label(
+                                kind == .deleted ? "Usuń trwale" : "Usuń",
+                                systemImage: "trash"
+                            )
+                        }
+                        .disabled(deletingIDs.contains(message.id))
+                    }
+                }
             }
         }
+        .listStyle(.plain)
+        .scrollContentBackground(.hidden)
+        .refreshable { await load() }
     }
 
     private func messageRow(_ message: MailMessage) -> some View {
@@ -193,10 +254,41 @@ struct MessagesView: View {
         sheet = .compose(ComposeContext(
             mode: .new,
             original: nil,
+            replyNames: [],
             recipients: [],
+            sender: model.defaultSender(in: mailboxes),
             subject: "",
             body: ""
         ))
+    }
+
+    // MARK: - Deletion
+
+    /// First delete moves the message to `Kosz`; deleting it there is final and
+    /// asks for confirmation.
+    private func requestDelete(_ message: MailMessage) {
+        actionError = nil
+        if kind == .deleted {
+            pendingPermanentDelete = message
+            isConfirmingPermanentDelete = true
+        } else {
+            Task { await delete(message, permanently: false) }
+        }
+    }
+
+    private func delete(_ message: MailMessage, permanently: Bool) async {
+        guard !deletingIDs.contains(message.id) else { return }
+        deletingIDs.insert(message.id)
+        let snapshot = messages
+        withAnimation { messages.removeAll { $0.id == message.id } }
+        do {
+            try await model.deleteMessage(id: message.id, permanently: permanently)
+            await load()
+        } catch {
+            withAnimation { messages = snapshot }
+            actionError = AppModel.describe(error)
+        }
+        deletingIDs.remove(message.id)
     }
 
     private func load() async {
@@ -229,11 +321,16 @@ private struct MessageDetailView: View {
     let mailboxes: [Mailbox]
     let canSend: Bool
     let onRead: (String) -> Void
+    let onDelete: (String) -> Void
 
     @State private var detail: MailMessageDetail?
     @State private var compose: ComposeContext?
     @State private var isLoading = true
     @State private var error: String?
+    @State private var actionError: String?
+    @State private var isDeleting = false
+    @State private var isConfirmingDelete = false
+    @State private var isPreparingCompose = false
 
     var body: some View {
         NavigationStack {
@@ -241,6 +338,10 @@ private struct MessageDetailView: View {
                 VStack(alignment: .leading, spacing: 16) {
                     if let error {
                         ErrorBanner(message: error)
+                    }
+
+                    if let actionError {
+                        ErrorBanner(message: actionError)
                     }
 
                     VStack(alignment: .leading, spacing: 6) {
@@ -299,29 +400,60 @@ private struct MessageDetailView: View {
                     Button("Zamknij") { dismiss() }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    if canSend {
-                        Menu {
+                    if isPreparingCompose {
+                        ProgressView()
+                    } else if canSend {
+                        HStack(spacing: 14) {
                             Button {
-                                openCompose(.reply)
+                                if kind == .deleted {
+                                    isConfirmingDelete = true
+                                } else {
+                                    Task { await deleteMessage() }
+                                }
                             } label: {
-                                Label("Odpowiedz", systemImage: "arrowshape.turn.up.left")
+                                Image(systemName: "trash")
                             }
-                            Button {
-                                openCompose(.reply, all: true)
+                            .tint(kind == .deleted ? Palette.error : Palette.primary)
+                            .disabled(isDeleting)
+                            .accessibilityLabel(kind == .deleted ? "Usuń trwale" : "Usuń")
+
+                            Menu {
+                                Button {
+                                    openCompose(.reply)
+                                } label: {
+                                    Label("Odpowiedz", systemImage: "arrowshape.turn.up.left")
+                                }
+                                Button {
+                                    openCompose(.reply, all: true)
+                                } label: {
+                                    Label(
+                                        "Odpowiedz wszystkim",
+                                        systemImage: "arrowshape.turn.up.left.2"
+                                    )
+                                }
+                                Button {
+                                    openCompose(.forward)
+                                } label: {
+                                    Label("Przekaż", systemImage: "arrowshape.turn.up.right")
+                                }
                             } label: {
-                                Label("Odpowiedz wszystkim", systemImage: "arrowshape.turn.up.left.2")
+                                Image(systemName: "ellipsis.circle")
                             }
-                            Button {
-                                openCompose(.forward)
-                            } label: {
-                                Label("Przekaż", systemImage: "arrowshape.turn.up.right")
-                            }
-                        } label: {
-                            Image(systemName: "ellipsis.circle")
+                            .tint(Palette.primary)
                         }
-                        .tint(Palette.primary)
                     }
                 }
+            }
+            .confirmationDialog(
+                "Usunąć wiadomość trwale?",
+                isPresented: $isConfirmingDelete
+            ) {
+                Button("Usuń trwale", role: .destructive) {
+                    Task { await deleteMessage() }
+                }
+                Button("Anuluj", role: .cancel) {}
+            } message: {
+                Text("„\(detail?.subject ?? message.subject)” zostanie usunięta bez możliwości przywrócenia.")
             }
             .sheet(item: $compose) { context in
                 ComposeMessageView(context: context, mailboxes: mailboxes)
@@ -353,6 +485,20 @@ private struct MessageDetailView: View {
             self.error = AppModel.describe(error)
         }
         isLoading = false
+    }
+
+    private func deleteMessage() async {
+        guard !isDeleting else { return }
+        isDeleting = true
+        actionError = nil
+        do {
+            try await model.deleteMessage(id: message.id, permanently: kind == .deleted)
+            onDelete(message.id)
+            dismiss()
+        } catch {
+            actionError = AppModel.describe(error)
+        }
+        isDeleting = false
     }
 
     private func openCompose(_ mode: MailSendMode, all: Bool = false) {
@@ -393,71 +539,64 @@ private struct MessageDetailView: View {
             quotedBody = ""
         }
 
-        compose = ComposeContext(
-            mode: mode,
-            original: message,
-            recipients: recipients(for: mode, all: all),
-            subject: subject,
-            body: quotedBody
-        )
-    }
-
-    private func recipients(for mode: MailSendMode, all: Bool) -> [Mailbox] {
-        guard mode != .forward, let detail else { return [] }
-        var result: [Mailbox] = []
-        if let sender = matchingMailbox(detail.sender) {
-            result.append(sender)
-        }
-        if all {
-            for name in detail.recipients {
-                if let box = matchingMailbox(name),
-                   !result.contains(where: { $0.id == box.id }) {
-                    result.append(box)
+        let names = replyNames(mode: mode, all: all)
+        isPreparingCompose = true
+        Task {
+            var recipients: [MailContact] = []
+            if mode != .forward {
+                do {
+                    recipients = resolvedRecipients(
+                        try await model.replyRecipients(for: message.id),
+                        all: all
+                    )
+                } catch {
+                    // The compose screen matches the displayed names against the
+                    // address books instead of guessing mailbox keys.
+                    recipients = []
                 }
             }
+            compose = ComposeContext(
+                mode: mode,
+                original: message,
+                replyNames: names,
+                recipients: recipients,
+                sender: model.defaultSender(in: mailboxes),
+                subject: subject,
+                body: quotedBody
+            )
+            isPreparingCompose = false
         }
-        return result
     }
 
-    /// Recipient names come from the server, so only resolve a mailbox when the
-    /// match is exact or unambiguous. Guessing here sends mail to the wrong person.
-    private func matchingMailbox(_ name: String) -> Mailbox? {
-        let target = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !target.isEmpty else { return nil }
-
-        let options: String.CompareOptions = [.caseInsensitive, .diacriticInsensitive]
-        if let exact = mailboxes.first(where: {
-            $0.displayName.compare(target, options: options) == .orderedSame
-                || $0.name.compare(target, options: options) == .orderedSame
-        }) {
-            return exact
+    /// Raw names shown by the server; used only when the reply lookup fails.
+    private func replyNames(mode: MailSendMode, all: Bool) -> [String] {
+        guard mode != .forward else { return [] }
+        var names: [String] = []
+        if let sender = detail?.sender, !sender.isEmpty {
+            names.append(sender)
         }
-
-        let candidates = mailboxes.filter { box in
-            let display = box.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !display.isEmpty else { return false }
-            return Self.wordsContained(display, in: target)
-                || Self.wordsContained(target, in: display)
+        if all {
+            names.append(contentsOf: detail?.recipients ?? [])
         }
-        return candidates.count == 1 ? candidates[0] : nil
+        return names
     }
 
-    /// True when every word of `needle` appears as a whole word in `haystack`.
-    private static func wordsContained(_ needle: String, in haystack: String) -> Bool {
-        let words = haystack
-            .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
-            .map(String.init)
-        let needles = needle
-            .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
-            .map(String.init)
-        guard !needles.isEmpty, !words.isEmpty else { return false }
-        return needles.allSatisfy { word in
-            words.contains {
-                $0.compare(
-                    word,
-                    options: [.caseInsensitive, .diacriticInsensitive]
-                ) == .orderedSame
-            }
+    private func resolvedRecipients(
+        _ reply: MailReplyRecipients,
+        all: Bool
+    ) -> [MailContact] {
+        var candidates: [MailContact] = []
+        if let sender = reply.sender {
+            candidates.append(sender)
+        }
+        if all {
+            candidates.append(contentsOf: reply.recipients)
+        }
+
+        let own = Set(mailboxes.map(\.globalKey))
+        var seen = Set<String>()
+        return candidates.filter { contact in
+            !own.contains(contact.globalKey) && seen.insert(contact.globalKey).inserted
         }
     }
 
@@ -490,7 +629,10 @@ private struct ComposeContext: Identifiable {
     let id = UUID()
     let mode: MailSendMode
     let original: MailMessage?
-    let recipients: [Mailbox]
+    /// Raw server names, used only when the reply lookup produced no keys.
+    let replyNames: [String]
+    let recipients: [MailContact]
+    let sender: Mailbox?
     let subject: String
     let body: String
 }
@@ -501,7 +643,11 @@ private struct ComposeMessageView: View {
     let context: ComposeContext
     let mailboxes: [Mailbox]
 
-    @State private var recipients: [Mailbox]
+    @State private var sender: Mailbox?
+    @State private var recipients: [MailContact]
+    @State private var contacts: [MailContact] = []
+    @State private var isLoadingContacts = false
+    @State private var contactsError: String?
     @State private var subject: String
     @State private var bodyText: String
     @State private var showRecipientPicker = false
@@ -511,6 +657,7 @@ private struct ComposeMessageView: View {
     init(context: ComposeContext, mailboxes: [Mailbox]) {
         self.context = context
         self.mailboxes = mailboxes
+        _sender = State(initialValue: context.sender ?? mailboxes.first)
         _recipients = State(initialValue: context.recipients)
         _subject = State(initialValue: context.subject)
         _bodyText = State(initialValue: context.body)
@@ -524,6 +671,11 @@ private struct ComposeMessageView: View {
                         ErrorBanner(message: error)
                     }
 
+                    SectionTitle(title: "Od")
+                    GlassCard {
+                        senderRow
+                    }
+
                     SectionTitle(title: "Odbiorcy")
                     GlassCard {
                         VStack(alignment: .leading, spacing: 10) {
@@ -532,30 +684,8 @@ private struct ComposeMessageView: View {
                                     .font(.caption)
                                     .foregroundStyle(Palette.onSurfaceVariant)
                             }
-                            ForEach(recipients) { box in
-                                HStack(spacing: 8) {
-                                    Image(systemName: "person.crop.circle")
-                                        .foregroundStyle(Palette.primary)
-                                    VStack(alignment: .leading, spacing: 1) {
-                                        Text(box.displayName)
-                                            .font(.subheadline)
-                                            .foregroundStyle(Palette.onSurface)
-                                        if let detail = box.detail {
-                                            Text(detail)
-                                                .font(.caption2)
-                                                .foregroundStyle(Palette.onSurfaceVariant)
-                                        }
-                                    }
-                                    Spacer(minLength: 0)
-                                    Button {
-                                        recipients.removeAll { $0.id == box.id }
-                                    } label: {
-                                        Image(systemName: "xmark.circle.fill")
-                                            .foregroundStyle(Palette.onSurfaceVariant)
-                                    }
-                                    .buttonStyle(.plain)
-                                    .accessibilityLabel("Usuń odbiorcę")
-                                }
+                            ForEach(recipients) { contact in
+                                recipientRow(contact)
                             }
                             Button {
                                 showRecipientPicker = true
@@ -564,6 +694,21 @@ private struct ComposeMessageView: View {
                                     .font(.subheadline)
                             }
                             .tint(Palette.primary)
+
+                            if isLoadingContacts {
+                                HStack(spacing: 8) {
+                                    ProgressView()
+                                        .controlSize(.small)
+                                    Text("Pobieranie kontaktów…")
+                                }
+                                .font(.caption)
+                                .foregroundStyle(Palette.onSurfaceVariant)
+                            } else if let contactsError {
+                                Text(contactsError)
+                                    .font(.caption)
+                                    .foregroundStyle(Palette.error)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
                         }
                     }
 
@@ -608,9 +753,131 @@ private struct ComposeMessageView: View {
                 }
             }
             .sheet(isPresented: $showRecipientPicker) {
-                RecipientPickerView(mailboxes: mailboxes, selected: $recipients)
+                RecipientPickerView(
+                    contacts: contacts,
+                    isLoading: isLoadingContacts,
+                    error: contactsError,
+                    retry: { Task { await loadContacts() } },
+                    selected: $recipients
+                )
+            }
+            .task(id: sender?.id) {
+                contacts = []
+                await loadContacts()
             }
             .interactiveDismissDisabled(isSending)
+        }
+    }
+
+    private var senderRow: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "paperplane.circle")
+                .foregroundStyle(Palette.primary)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(sender?.displayName ?? "Brak skrzynki")
+                    .font(.subheadline)
+                    .foregroundStyle(Palette.onSurface)
+                if let detail = sender?.detail {
+                    Text(detail)
+                        .font(.caption2)
+                        .foregroundStyle(Palette.onSurfaceVariant)
+                }
+            }
+            Spacer(minLength: 0)
+            if mailboxes.count > 1 {
+                Menu {
+                    ForEach(mailboxes) { box in
+                        Button {
+                            sender = box
+                        } label: {
+                            if box.id == sender?.id {
+                                Label(box.displayName, systemImage: "checkmark")
+                            } else {
+                                Text(box.displayName)
+                            }
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        Text("Zmień")
+                        Image(systemName: "chevron.up.chevron.down")
+                    }
+                    .font(.caption)
+                    .foregroundStyle(Palette.primary)
+                }
+                .accessibilityLabel("Zmień skrzynkę nadawcy")
+            }
+        }
+    }
+
+    private func recipientRow(_ contact: MailContact) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "person.crop.circle")
+                .foregroundStyle(Palette.primary)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(contact.displayName)
+                    .font(.subheadline)
+                    .foregroundStyle(Palette.onSurface)
+                if let detail = contact.detail {
+                    Text(detail)
+                        .font(.caption2)
+                        .foregroundStyle(Palette.onSurfaceVariant)
+                }
+            }
+            Spacer(minLength: 0)
+            Button {
+                recipients.removeAll { $0.globalKey == contact.globalKey }
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundStyle(Palette.onSurfaceVariant)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Usuń odbiorcę")
+        }
+    }
+
+    // MARK: Contacts
+
+    private func loadContacts() async {
+        let requested = sender?.id
+        isLoadingContacts = true
+        contactsError = nil
+        do {
+            let loaded = try await model.loadContacts(sender: sender)
+            guard !Task.isCancelled, sender?.id == requested else { return }
+            contacts = loaded
+            prefillIfNeeded(loaded)
+            isLoadingContacts = false
+        } catch is CancellationError {
+            return
+        } catch let error as URLError where error.code == .cancelled {
+            return
+        } catch {
+            guard !Task.isCancelled, sender?.id == requested else { return }
+            contacts = []
+            contactsError = AppModel.describe(error)
+            isLoadingContacts = false
+        }
+    }
+
+    /// Fallback when the reply lookup could not resolve mailbox keys: match the
+    /// names shown by the server against the exact address-book entries.
+    private func prefillIfNeeded(_ loaded: [MailContact]) {
+        guard recipients.isEmpty, !context.replyNames.isEmpty else { return }
+
+        let exact = loaded.filter { context.replyNames.contains($0.name) }
+        let candidates: [MailContact]
+        if exact.isEmpty {
+            let names = context.replyNames.map { VulcanMailboxName.parse($0)?.name ?? $0 }
+            candidates = loaded.filter { names.contains($0.displayName) }
+        } else {
+            candidates = exact
+        }
+
+        let own = Set(mailboxes.map(\.globalKey))
+        var seen = Set<String>()
+        recipients = candidates.filter { contact in
+            !own.contains(contact.globalKey) && seen.insert(contact.globalKey).inserted
         }
     }
 
@@ -633,7 +900,8 @@ private struct ComposeMessageView: View {
             let draft = MailDraft(
                 recipients: recipients,
                 subject: subject.trimmingCharacters(in: .whitespacesAndNewlines),
-                body: bodyText
+                body: bodyText,
+                sender: sender
             )
             try await model.sendMessage(
                 draft,
@@ -650,63 +918,120 @@ private struct ComposeMessageView: View {
 
 private struct RecipientPickerView: View {
     @Environment(\.dismiss) private var dismiss
-    let mailboxes: [Mailbox]
-    @Binding var selected: [Mailbox]
+    let contacts: [MailContact]
+    let isLoading: Bool
+    let error: String?
+    let retry: () -> Void
+    @Binding var selected: [MailContact]
     @State private var query = ""
 
     var body: some View {
         NavigationStack {
-            List(filtered) { box in
-                Button {
-                    toggle(box)
-                } label: {
-                    HStack(spacing: 10) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(box.displayName)
-                                .foregroundStyle(Palette.onSurface)
-                            if let detail = box.detail {
-                                Text(detail)
-                                    .font(.caption2)
-                                    .foregroundStyle(Palette.onSurfaceVariant)
-                            }
-                        }
-                        Spacer(minLength: 0)
-                        if selected.contains(where: { $0.id == box.id }) {
-                            Image(systemName: "checkmark.circle.fill")
-                                .foregroundStyle(Palette.primary)
-                        }
+            content
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(ScreenBackground())
+                .searchable(text: $query, prompt: "Szukaj odbiorcy")
+                .navigationTitle("Odbiorcy")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Gotowe") { dismiss() }
                     }
                 }
-                .buttonStyle(.plain)
-            }
-            .scrollContentBackground(.hidden)
-            .background(ScreenBackground())
-            .searchable(text: $query, prompt: "Szukaj odbiorcy")
-            .navigationTitle("Odbiorcy")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Gotowe") { dismiss() }
-                }
-            }
         }
         .presentationDetents([.large])
     }
 
-    private var filtered: [Mailbox] {
-        let text = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return mailboxes }
-        return mailboxes.filter {
-            $0.name.localizedCaseInsensitiveContains(text)
-                || $0.displayName.localizedCaseInsensitiveContains(text)
+    @ViewBuilder
+    private var content: some View {
+        if isLoading && contacts.isEmpty {
+            LoadingView()
+        } else if contacts.isEmpty, let error {
+            ScrollView {
+                ErrorStateView(message: error, retry: retry)
+                    .padding(20)
+            }
+        } else if contacts.isEmpty {
+            ScrollView {
+                EmptyStateView(
+                    icon: "person.2.slash",
+                    title: "Brak kontaktów",
+                    message: "Ta skrzynka nie zwróciła żadnych adresów."
+                )
+                .padding(20)
+            }
+        } else if filtered.isEmpty {
+            ScrollView {
+                EmptyStateView(
+                    icon: "magnifyingglass",
+                    title: "Brak wyników",
+                    message: "Żaden kontakt nie pasuje do wyszukiwania."
+                )
+                .padding(20)
+            }
+        } else {
+            list
         }
     }
 
-    private func toggle(_ box: Mailbox) {
-        if let index = selected.firstIndex(where: { $0.id == box.id }) {
+    private var list: some View {
+        List {
+            ForEach(MailContactRole.allCases) { role in
+                let items = filtered.filter { $0.role == role }
+                if !items.isEmpty {
+                    Section {
+                        ForEach(items) { contact in
+                            Button {
+                                toggle(contact)
+                            } label: {
+                                row(contact)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    } header: {
+                        Text(role.groupTitle)
+                    }
+                }
+            }
+        }
+        .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
+    }
+
+    private func row(_ contact: MailContact) -> some View {
+        HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(contact.displayName)
+                    .foregroundStyle(Palette.onSurface)
+                if let detail = contact.detail {
+                    Text(detail)
+                        .font(.caption2)
+                        .foregroundStyle(Palette.onSurfaceVariant)
+                }
+            }
+            Spacer(minLength: 0)
+            if selected.contains(where: { $0.globalKey == contact.globalKey }) {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(Palette.primary)
+            }
+        }
+    }
+
+    private var filtered: [MailContact] {
+        let text = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return contacts }
+        return contacts.filter { contact in
+            contact.displayName.localizedStandardContains(text)
+                || contact.name.localizedStandardContains(text)
+                || (contact.school?.localizedStandardContains(text) ?? false)
+        }
+    }
+
+    private func toggle(_ contact: MailContact) {
+        if let index = selected.firstIndex(where: { $0.globalKey == contact.globalKey }) {
             selected.remove(at: index)
         } else {
-            selected.append(box)
+            selected.append(contact)
         }
     }
 }

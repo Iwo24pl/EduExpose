@@ -60,6 +60,12 @@ actor HebeMailService: MailService {
         [mailbox]
     }
 
+    /// Hebe accounts are read-only in this app, so compose never asks for an
+    /// address book.
+    func contacts(sender: Mailbox?) async throws -> [MailContact] {
+        []
+    }
+
     func send(_ draft: MailDraft) async throws {
         throw VulcanError.message("Wysyłanie wiadomości jest dostępne tylko dla skrzynki Prometheus.")
     }
@@ -70,6 +76,14 @@ actor HebeMailService: MailService {
 
     func forward(_ draft: MailDraft, from id: String) async throws {
         throw VulcanError.message("Przekazywanie jest dostępne tylko dla skrzynki Prometheus.")
+    }
+
+    func replyRecipients(for id: String) async throws -> MailReplyRecipients {
+        .none
+    }
+
+    func delete(id: String, permanently: Bool) async throws {
+        throw VulcanError.message("Usuwanie wiadomości jest dostępne tylko dla skrzynki Prometheus.")
     }
 
     private func findMessage(id: String) async throws -> Message {

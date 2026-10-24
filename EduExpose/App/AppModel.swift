@@ -417,6 +417,46 @@ final class AppModel {
         }
     }
 
+    /// The default "Od:" mailbox for the active pupil.
+    func defaultSender(in boxes: [Mailbox]) -> Mailbox? {
+        guard let pupil = activeAccount?.pupil else { return boxes.first }
+        return VulcanMailboxName.bestMatch(
+            in: boxes,
+            firstName: pupil.firstName,
+            surname: pupil.surname
+        )
+    }
+
+    func loadContacts(sender: Mailbox?) async throws -> [MailContact] {
+        let service = try currentMailService()
+        do {
+            return try await service.contacts(sender: sender)
+        } catch {
+            invalidateMailSession(for: error)
+            throw error
+        }
+    }
+
+    func replyRecipients(for id: String) async throws -> MailReplyRecipients {
+        let service = try currentMailService()
+        do {
+            return try await service.replyRecipients(for: id)
+        } catch {
+            invalidateMailSession(for: error)
+            throw error
+        }
+    }
+
+    func deleteMessage(id: String, permanently: Bool) async throws {
+        let service = try currentMailService()
+        do {
+            try await service.delete(id: id, permanently: permanently)
+        } catch {
+            invalidateMailSession(for: error)
+            throw error
+        }
+    }
+
     func markRead(id: String) async {
         do {
             try await currentMailService().markRead(id: id)

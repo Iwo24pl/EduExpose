@@ -52,10 +52,75 @@ struct MailMessageDetail: Sendable {
     let attachments: [MailAttachment]
 }
 
+/// One entry of the mailbox address book (`Pracownicy`, `Opiekunowie`,
+/// `Uczniowie`). The server name keeps its `Imię Nazwisko - R - (Szkoła)`
+/// shape, so the display fields reuse `VulcanMailboxName`.
+struct MailContact: Identifiable, Hashable, Sendable {
+    let globalKey: String
+    let name: String
+    let role: MailContactRole
+    let displayName: String
+    let school: String?
+
+    init(globalKey: String, name: String, role: MailContactRole) {
+        self.globalKey = globalKey
+        self.name = name
+        self.role = role
+        let parsed = VulcanMailboxName.parse(name)
+        displayName = parsed?.studentName ?? parsed?.name ?? name
+        school = parsed?.shortSchoolName.nilIfEmpty
+    }
+
+    /// Role is part of the identity: the same person can be both a teacher and
+    /// a parent, and the address book lists them with different mailbox keys.
+    var id: String { "\(role.rawValue)-\(globalKey)" }
+
+    var detail: String? { school }
+}
+
+enum MailContactRole: String, CaseIterable, Identifiable, Sendable {
+    case employee
+    case guardian
+    case student
+
+    var id: String { rawValue }
+
+    var groupTitle: String {
+        switch self {
+        case .employee: return "Nauczyciele"
+        case .guardian: return "Rodzice"
+        case .student: return "Uczniowie"
+        }
+    }
+
+    /// Role letter used by the server mailbox names: `P`, `R`/`O`, `U`.
+    static func role(inName name: String) -> MailContactRole? {
+        guard let role = VulcanMailboxName.parse(name)?.role else { return nil }
+        switch role {
+        case "P": return .employee
+        case "R", "O": return .guardian
+        case "U": return .student
+        default: return nil
+        }
+    }
+}
+
 struct MailDraft: Sendable {
-    var recipients: [Mailbox]
+    var recipients: [MailContact]
     var subject: String
     var body: String
+    /// Chosen "Od:" mailbox. `nil` keeps the mailbox the client resolves for
+    /// the active pupil.
+    var sender: Mailbox? = nil
+}
+
+/// The exact participants of a reply, when the server can provide their
+/// mailbox keys. Names alone cannot be turned into recipients.
+struct MailReplyRecipients: Sendable {
+    var sender: MailContact?
+    var recipients: [MailContact]
+
+    static let none = MailReplyRecipients(sender: nil, recipients: [])
 }
 
 enum MailSendMode: Sendable, Equatable {
@@ -71,9 +136,12 @@ protocol MailService: Sendable {
     func detail(id: String) async throws -> MailMessageDetail
     func markRead(id: String) async throws
     func mailboxes() async throws -> [Mailbox]
+    func contacts(sender: Mailbox?) async throws -> [MailContact]
     func send(_ draft: MailDraft) async throws
     func reply(_ draft: MailDraft, to id: String) async throws
     func forward(_ draft: MailDraft, from id: String) async throws
+    func replyRecipients(for id: String) async throws -> MailReplyRecipients
+    func delete(id: String, permanently: Bool) async throws
 }
 
 // MARK: - Prometheus mailbox name
@@ -156,6 +224,21 @@ struct VulcanMailboxName: Equatable, Sendable {
                     options: [.caseInsensitive, .diacriticInsensitive]
                 ) == .orderedSame
             }
+    }
+
+    /// The mailbox that belongs to a pupil. Shared by the client (sending) and
+    /// the compose screen (default "Od:") so both pick the same one.
+    static func bestMatch(
+        in boxes: [Mailbox],
+        firstName: String,
+        surname: String
+    ) -> Mailbox? {
+        boxes.first { box in
+            VulcanMailboxName.parse(box.name)?
+                .matches(firstName: firstName, surname: surname) == true
+        } ?? boxes.first { box in
+            containsWord(firstName, in: box.name) && containsWord(surname, in: box.name)
+        } ?? boxes.first
     }
 }
 

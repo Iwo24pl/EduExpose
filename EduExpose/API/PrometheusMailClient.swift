@@ -51,6 +51,60 @@ struct PrometheusSendMessage: Encodable, Sendable {
     let przekazana: String?
 }
 
+/// One address-book entry. The live endpoints return `skrzynkaGlobalKey` and
+/// `nazwa`; `globalKey`/`name` are accepted because the directory endpoints
+/// are not covered by the API documentation.
+struct PrometheusContactDTO: Decodable, Sendable {
+    let skrzynkaGlobalKey: String
+    let nazwa: String
+
+    private enum CodingKeys: String, CodingKey {
+        case skrzynkaGlobalKey
+        case globalKey
+        case nazwa
+        case name
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let key = try container.decodeIfPresent(String.self, forKey: .skrzynkaGlobalKey)
+        let alternateKey = try container.decodeIfPresent(String.self, forKey: .globalKey)
+        guard let globalKey = key ?? alternateKey, !globalKey.isEmpty else {
+            throw DecodingError.keyNotFound(
+                CodingKeys.skrzynkaGlobalKey,
+                DecodingError.Context(
+                    codingPath: decoder.codingPath,
+                    debugDescription: "Brak klucza skrzynki w adresacie."
+                )
+            )
+        }
+        skrzynkaGlobalKey = globalKey
+
+        let name = try container.decodeIfPresent(String.self, forKey: .nazwa)
+        let alternateName = try container.decodeIfPresent(String.self, forKey: .name)
+        nazwa = name ?? alternateName ?? ""
+    }
+}
+
+/// Participants of a reply/forward, including the mailbox keys that the message
+/// list/detail payloads do not carry.
+struct PrometheusReplyDTO: Decodable, Sendable {
+    let nadawcaSkrzynkaGlobalKey: String?
+    let nadawcaSkrzynkaNazwa: String?
+    let adresaci: [PrometheusContactDTO]?
+}
+
+/// The two deletion calls share one body shape: a JSON array of message keys.
+enum PrometheusDeletion {
+    static func endpoint(permanently: Bool) -> String {
+        permanently ? "Delete" : "MoveTrash"
+    }
+
+    static func body(id: String) throws -> Data {
+        try JSONEncoder().encode([id])
+    }
+}
+
 // MARK: - Errors
 
 enum PrometheusMailError: LocalizedError, Sendable {
@@ -98,6 +152,9 @@ actor PrometheusMailClient: MailService {
     private var isInitialized = false
     private var initialization: Task<Void, Error>?
     private var selectedMailbox: Mailbox?
+    /// Address books are per sender mailbox, so the cache is keyed by its
+    /// `globalKey`. Entries are immutable for a session.
+    private var contactCache: [String: [MailContact]] = [:]
     private var antiForgeryToken = ""
     private var appGuid = ""
     private var apiBase: URL?
@@ -196,8 +253,52 @@ actor PrometheusMailClient: MailService {
         return try await fetchMailboxes()
     }
 
+    /// The three directories behind one sender mailbox. They are separate
+    /// calls, so they are fetched once per mailbox and cached.
+    func contacts(sender: Mailbox?) async throws -> [MailContact] {
+        let mailbox: Mailbox
+        if let sender {
+            mailbox = sender
+        } else {
+            mailbox = try await resolveMailbox()
+        }
+        if let cached = contactCache[mailbox.globalKey] {
+            return cached
+        }
+
+        var collected: [MailContact] = []
+        for (role, endpoint) in Self.contactDirectories {
+            let data = try await apiRequest(
+                endpoint: endpoint,
+                query: [URLQueryItem(name: "globalKeySkrzynka", value: mailbox.globalKey)]
+            )
+            let items: [MailContact]
+            do {
+                items = try Self.decodeContacts(data, role: role)
+            } catch {
+                // The directory shape is the only part of this API not covered
+                // by the confirmed endpoints; keep the trace actionable.
+                await trace("contacts.\(endpoint).decode-error", "bytes=\(data.count)")
+                throw PrometheusMailError.invalidResponse
+            }
+            await trace("contacts.\(endpoint)", "\(items.count)")
+            collected.append(contentsOf: items)
+        }
+
+        var seen = Set<String>()
+        let contacts = collected
+            .filter { !$0.globalKey.isEmpty && !$0.name.isEmpty }
+            .filter { seen.insert($0.id).inserted }
+            .sorted {
+                $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending
+            }
+        contactCache[mailbox.globalKey] = contacts
+        await trace("contacts.ready", "\(contacts.count)")
+        return contacts
+    }
+
     func send(_ draft: MailDraft) async throws {
-        let mailbox = try await resolveMailbox()
+        let mailbox = try await senderMailbox(draft.sender)
         let payload = PrometheusSendMessage(
             globalKey: UUID().uuidString,
             watekGlobalKey: UUID().uuidString,
@@ -214,7 +315,7 @@ actor PrometheusMailClient: MailService {
     }
 
     func reply(_ draft: MailDraft, to id: String) async throws {
-        let mailbox = try await resolveMailbox()
+        let mailbox = try await senderMailbox(draft.sender)
         let payload = PrometheusSendMessage(
             globalKey: UUID().uuidString,
             watekGlobalKey: UUID().uuidString,
@@ -231,7 +332,7 @@ actor PrometheusMailClient: MailService {
     }
 
     func forward(_ draft: MailDraft, from id: String) async throws {
-        let mailbox = try await resolveMailbox()
+        let mailbox = try await senderMailbox(draft.sender)
         let payload = PrometheusSendMessage(
             globalKey: UUID().uuidString,
             watekGlobalKey: UUID().uuidString,
@@ -245,6 +346,45 @@ actor PrometheusMailClient: MailService {
             przekazana: id
         )
         try await post(payload, endpoint: "WiadomoscOdpowiedzPrzekaz")
+    }
+
+    /// `GET` on the same endpoint that sends replies returns the original
+    /// participants together with their mailbox keys. Falls back to no
+    /// recipients when the endpoint is unavailable; the UI then matches the
+    /// displayed names against the cached address books.
+    func replyRecipients(for id: String) async throws -> MailReplyRecipients {
+        let data = try await apiRequest(
+            endpoint: "WiadomoscOdpowiedzPrzekaz",
+            query: [URLQueryItem(name: "apiGlobalKey", value: id)]
+        )
+        let item = try decoder.decode(PrometheusReplyDTO.self, from: data)
+
+        let senderName = item.nadawcaSkrzynkaNazwa.flatMap { $0.nilIfEmpty } ?? "Odbiorca"
+        let senderKey = item.nadawcaSkrzynkaGlobalKey.flatMap { $0.nilIfEmpty }
+        let sender: MailContact? = senderKey.map { key in
+            MailContact(
+                globalKey: key,
+                name: senderName,
+                role: MailContactRole.role(inName: senderName) ?? .employee
+            )
+        }
+        let recipients = (item.adresaci ?? []).compactMap { dto -> MailContact? in
+            guard !dto.skrzynkaGlobalKey.isEmpty, !dto.nazwa.isEmpty else { return nil }
+            return MailContact(
+                globalKey: dto.skrzynkaGlobalKey,
+                name: dto.nazwa,
+                role: MailContactRole.role(inName: dto.nazwa) ?? .employee
+            )
+        }
+        return MailReplyRecipients(sender: sender, recipients: recipients)
+    }
+
+    func delete(id: String, permanently: Bool) async throws {
+        _ = try await apiRequest(
+            endpoint: PrometheusDeletion.endpoint(permanently: permanently),
+            method: "POST",
+            body: try PrometheusDeletion.body(id: id)
+        )
     }
 
     // MARK: Initialization
@@ -760,18 +900,38 @@ actor PrometheusMailClient: MailService {
 
     // MARK: Mailbox selection
 
+    /// The sender chosen in compose, or the mailbox that belongs to the pupil.
+    private func senderMailbox(_ requested: Mailbox?) async throws -> Mailbox {
+        if let requested { return requested }
+        return try await resolveMailbox()
+    }
+
+    private static let contactDirectories: [(MailContactRole, String)] = [
+        (.employee, "Pracownicy"),
+        (.guardian, "Opiekunowie"),
+        (.student, "Uczniowie")
+    ]
+
+    /// Kept internal so the payload shape is covered by unit tests.
+    static func decodeContacts(_ data: Data, role: MailContactRole) throws -> [MailContact] {
+        try JSONDecoder().decode([PrometheusContactDTO].self, from: data).map { item in
+            MailContact(
+                globalKey: item.skrzynkaGlobalKey,
+                name: item.nazwa,
+                role: role
+            )
+        }
+    }
+
     private func resolveMailbox() async throws -> Mailbox {
         try await ensureInitialized()
         if let selectedMailbox { return selectedMailbox }
         let boxes = try await fetchMailboxes()
-        let matched = boxes.first { box in
-            VulcanMailboxName.parse(box.name)?
-                .matches(firstName: pupilFirstName, surname: pupilSurname) == true
-        } ?? boxes.first { box in
-            VulcanMailboxName.containsWord(pupilFirstName, in: box.name)
-                && VulcanMailboxName.containsWord(pupilSurname, in: box.name)
-        } ?? boxes.first
-        guard let matched else {
+        guard let matched = VulcanMailboxName.bestMatch(
+            in: boxes,
+            firstName: pupilFirstName,
+            surname: pupilSurname
+        ) else {
             throw PrometheusMailError.noMailbox
         }
         selectedMailbox = matched
