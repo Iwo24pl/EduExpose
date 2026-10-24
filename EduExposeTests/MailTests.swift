@@ -190,14 +190,16 @@ struct WSFedFormTests {
     &lt;trust:RequestSecurityTokenResponseCollection xmlns:trust=&quot;http://docs.oasis-open.org/ws-sx/ws-trust/200512&quot;>&lt;trust:RequestSecurityTokenResponse Context=&quot;nslo=1&quot;>&lt;saml:Assertion MajorVersion=&quot;1&quot; AssertionID=&quot;_abc-123&quot; Issuer=&quot;PrometeuszSecurityTokenService&quot; xmlns:saml=&quot;urn:oasis:names:tc:SAML:1.0:assertion&quot;>&lt;saml:Conditions>&lt;/saml:Conditions>&lt;/saml:Assertion>&lt;/trust:RequestSecurityTokenResponse>&lt;/trust:RequestSecurityTokenResponseCollection>
     """
 
-    private let page = """
-    <html><head><title>Working...</title></head><body>
-    <form method="POST" name="hiddenform" action="https://dziennik-logowanie.vulcan.net.pl/katowice/Fs/Ls?wa=wsignin1.0">
-    <input type="hidden" name="wa" value="wsignin1.0" />
-    <input type="hidden" name="wresult" value="\(token)" />
-    <input type="hidden" name="wctx" value="nslo=1" />
-    </form></body></html>
-    """
+    private var page: String {
+        """
+        <html><head><title>Working...</title></head><body>
+        <form method="POST" name="hiddenform" action="https://dziennik-logowanie.vulcan.net.pl/katowice/Fs/Ls?wa=wsignin1.0">
+        <input type="hidden" name="wa" value="wsignin1.0" />
+        <input type="hidden" name="wresult" value="\(token)" />
+        <input type="hidden" name="wctx" value="nslo=1" />
+        </form></body></html>
+        """
+    }
 
     @Test("Reads the WS-Fed token even though its value contains a raw '>'")
     func readsTokenWithRawGreaterThan() throws {
