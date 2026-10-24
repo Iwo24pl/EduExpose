@@ -67,8 +67,9 @@ enum Palette {
     static let warning = Color(hex: "FFD27A")
 }
 
-/// Dark navy wash behind glass surfaces.
-struct ScreenBackground: View {
+/// Dark navy wash shared by full screens and translucent sheets.
+/// It deliberately does not ignore the safe area so it can also back a sheet.
+struct BrandBackdrop: View {
     var body: some View {
         ZStack {
             LinearGradient(
@@ -92,6 +93,13 @@ struct ScreenBackground: View {
                 endRadius: 520
             )
         }
-        .ignoresSafeArea()
+    }
+}
+
+/// Dark navy wash behind glass surfaces.
+struct ScreenBackground: View {
+    var body: some View {
+        BrandBackdrop()
+            .ignoresSafeArea()
     }
 }

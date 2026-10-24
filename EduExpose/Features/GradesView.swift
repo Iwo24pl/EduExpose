@@ -219,7 +219,14 @@ private struct GradeDetailSheet: View {
             }
         }
         .presentationDetents([.medium, .large])
-        .presentationBackground(.thinMaterial)
+        .presentationBackground {
+            ZStack {
+                Rectangle()
+                    .fill(.ultraThinMaterial)
+                BrandBackdrop()
+                    .opacity(0.6)
+            }
+        }
         .presentationDragIndicator(.visible)
     }
 
