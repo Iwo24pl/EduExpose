@@ -210,7 +210,7 @@ jobs:
           make_latest: false
           body: |
             Automatyczny build gałęzi `swift` z commita ${{ github.sha }}.
-            IPA jest niepodpisane — podpisz je Sideloadly przed instalacją.
+            IPA jest niepodpisane — podpisz je w iLoaderze lub SideStore.
             Instrukcja: docs/sideloading.md
           files: |
             EduExpose-unsigned.ipa
