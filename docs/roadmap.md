@@ -12,7 +12,7 @@ na iOS 26+, z Liquid Glass i bez pozostałości Kotlina.
 | System | iOS 26.0+, iPhone, pion |
 | Język | polski |
 | Repozytorium | ta sama historia, gałąź `swift` |
-| Dystrybucja | niepodpisane IPA z GitHub Actions + Sideloadly |
+| Dystrybucja | niepodpisane IPA z GitHub Actions + iLoader/SideStore |
 | Bundle ID | com.iwo24pl.eduexpose |
 
 ## Stan po przebudowie
