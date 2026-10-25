@@ -210,7 +210,8 @@ Buildy `latest` są oznaczone jako prerelease. Stabilne wydania publikuj tagiem
 - Diagnostyka poczty (`Ustawienia → Diagnostyka`) pokazuje adresy, statusy
   i nazwy ciasteczek, ale **nie** hasła ani wartości tokenów. Dziennik możesz
   skopiować i dołączyć do zgłoszenia błędu.
-- Zgłaszanie podatności: [SECURITY.md](SECURITY.md).
+- Problemy bezpieczeństwa zgłaszaj prywatnie przez GitHub (profil właściciela
+  repozytorium), a nie w publicznym issue.
 
 ## Znane ograniczenia
 
