@@ -527,22 +527,37 @@ final class AppModel {
 
     func checkForUpdate() async {
         updateInfo = nil
-        guard let url = URL(string: "https://api.github.com/repos/Iwo24pl/EduExpose/releases") else { return }
+        guard let url = URL(
+            string: "https://api.github.com/repos/Iwo24pl/EduExpose/releases?per_page=30"
+        ) else { return }
         do {
             var request = URLRequest(url: url)
             request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
             request.setValue("EduExpose-iOS", forHTTPHeaderField: "User-Agent")
-            let (data, _) = try await URLSession.shared.data(for: request)
-            let releases = try JSONDecoder().decode([GitHubRelease].self, from: data)
-            guard let latest = releases.first else {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse,
+                  (200..<300).contains(http.statusCode) else {
+                errorMessage = "Nie udało się sprawdzić aktualizacji."
+                return
+            }
+
+            let releases = try JSONDecoder().decode([AppRelease].self, from: data)
+            let currentRaw = Bundle.main.object(
+                forInfoDictionaryKey: "CFBundleShortVersionString"
+            ) as? String ?? "1.0.0"
+            guard let current = AppVersion(currentRaw) else {
+                errorMessage = "Nie udało się odczytać wersji aplikacji."
+                return
+            }
+            guard let newest = AppReleasePicker.newest(in: releases, current: current) else {
                 errorMessage = "Brak opublikowanych wydań."
                 return
             }
-            let current = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0.0"
+
             updateInfo = UpdateInfo(
-                version: latest.tagName,
-                url: URL(string: latest.htmlURL) ?? url,
-                isNewer: latest.tagName != current
+                version: newest.release.tagName,
+                url: URL(string: newest.release.htmlURL) ?? url,
+                isNewer: current < newest.version
             )
         } catch {
             errorMessage = "Nie udało się sprawdzić aktualizacji."
@@ -564,16 +579,6 @@ final class AppModel {
             return description
         }
         return error.localizedDescription
-    }
-}
-
-private struct GitHubRelease: Decodable {
-    let tagName: String
-    let htmlURL: String
-
-    enum CodingKeys: String, CodingKey {
-        case tagName = "tag_name"
-        case htmlURL = "html_url"
     }
 }
 

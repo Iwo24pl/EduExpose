@@ -233,6 +233,10 @@ struct SettingsView: View {
                             Text("Dostępna jest nowsza wersja.")
                                 .font(.footnote)
                                 .foregroundStyle(Palette.success)
+                        } else {
+                            Text("Masz najnowszą wersję.")
+                                .font(.footnote)
+                                .foregroundStyle(Palette.onSurfaceVariant)
                         }
 
                         Link("Otwórz GitHub Releases", destination: info.url)
