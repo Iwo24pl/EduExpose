@@ -12,7 +12,6 @@
 <p align="center">
   <a href="https://github.com/Iwo24pl/EduExpose/actions/workflows/ios-ci.yml"><img src="https://github.com/Iwo24pl/EduExpose/actions/workflows/ios-ci.yml/badge.svg?branch=swift" alt="iOS CI"></a>
   <a href="https://github.com/Iwo24pl/EduExpose/releases/latest"><img src="https://img.shields.io/github/v/release/Iwo24pl/EduExpose?display_name=tag&label=wersja&color=0085F8" alt="Najnowsze stabilne wydanie"></a>
-  <a href="https://github.com/Iwo24pl/EduExpose/releases"><img src="https://img.shields.io/github/v/release/Iwo24pl/EduExpose?include_prereleases&label=build" alt="Latest build"></a>
   <a href="https://github.com/Iwo24pl/EduExpose/blob/swift/LICENSE"><img src="https://img.shields.io/github/license/Iwo24pl/EduExpose" alt="MIT"></a>
   <img src="https://img.shields.io/badge/iOS-26.0%2B-black" alt="iOS 26.0+">
 </p>
