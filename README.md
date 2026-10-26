@@ -11,6 +11,7 @@
 
 <p align="center">
   <a href="https://github.com/Iwo24pl/EduExpose/actions/workflows/ios-ci.yml"><img src="https://github.com/Iwo24pl/EduExpose/actions/workflows/ios-ci.yml/badge.svg?branch=swift" alt="iOS CI"></a>
+  <a href="https://github.com/Iwo24pl/EduExpose/releases/latest"><img src="https://img.shields.io/github/v/release/Iwo24pl/EduExpose?display_name=tag&label=wersja&color=0085F8" alt="Najnowsze stabilne wydanie"></a>
   <a href="https://github.com/Iwo24pl/EduExpose/releases"><img src="https://img.shields.io/github/v/release/Iwo24pl/EduExpose?include_prereleases&label=build" alt="Latest build"></a>
   <a href="https://github.com/Iwo24pl/EduExpose/blob/swift/LICENSE"><img src="https://img.shields.io/github/license/Iwo24pl/EduExpose" alt="MIT"></a>
   <img src="https://img.shields.io/badge/iOS-26.0%2B-black" alt="iOS 26.0+">
@@ -25,7 +26,8 @@ bez pośredników i bez analityki.
 
 Projekt jest kontynuacją **Dzienniczka Szpontniczek** (Kotlin/Compose).
 Katalog `composeApp/` pozostaje w repozytorium jako implementacja referencyjna,
-a wersja na iOS jest w całości napisana w Swift 6. Aktualna wersja: **1.0.0**.
+a wersja na iOS jest w całości napisana w Swift 6. Numer najnowszego stabilnego
+wydania aktualizuje się automatycznie w badge'u **wersja** u góry.
 
 ## Funkcje
 
