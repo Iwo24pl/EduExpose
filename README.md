@@ -6,7 +6,7 @@
 
 <p align="center">
   Natywny klient <strong>eduVULCAN</strong> dla iPhone'a.<br>
-  SwiftUI · Swift 6 · iOS 26 · Liquid Glass
+  SwiftUI · Swift 6 · iOS 26+ · Liquid Glass
 </p>
 
 <p align="center">
