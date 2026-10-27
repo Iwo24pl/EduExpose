@@ -18,6 +18,6 @@ struct PrometheusAuthService: RegistryAuthService {
     func signIn(login: String, password: String) async throws -> [RegistryStudent] {
         let found = try await PrometheusLoginService(session: session)
             .signIn(login: login, password: password)
-        return found.map(RegistryStudent.init(legacy:))
+        return found.map { RegistryStudent(legacy: $0) }
     }
 }

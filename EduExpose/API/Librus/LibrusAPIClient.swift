@@ -96,7 +96,10 @@ struct LibrusAPIClient: Sendable {
     func bootstrapMessages() async throws -> Bool {
         do {
             let response = try await session.send(
-                LibrusRequest(url: LibrusConstants.messagesBootstrapURL)
+                LibrusRequest(
+                    url: LibrusConstants.messagesBootstrapURL,
+                    followsRedirects: true
+                )
             )
             if response.status == 403 || response.status == 404 {
                 return false
