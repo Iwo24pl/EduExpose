@@ -41,6 +41,8 @@ wydania aktualizuje się automatycznie w badge'u **wersja** u góry.
 
 - Start: oceny, szczęśliwy numer i nadchodzące sprawdziany,
 - Oceny: średnie, filtrowanie po okresie i szczegóły oceny,
+- Frekwencja: procent obecności, statystyki miesięczne i przedmiotowe oraz
+  lista nieobecności i spóźnień,
 - Plan lekcji z zastępstwami i nawigacją po tygodniach,
 - Sprawdziany, zadania domowe, notatki/uwagi i ogłoszenia.
 

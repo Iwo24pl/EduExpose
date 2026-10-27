@@ -301,6 +301,29 @@ final class AppModel {
         return GradesSnapshot(grades: try await gradesTask, averages: try await averagesTask)
     }
 
+    func loadAttendance(period: Period) async throws -> AttendanceSnapshot {
+        let (_, account, client, _) = try context()
+        async let monthsTask = client.presenceMonthStats(
+            pupilId: account.pupil.id,
+            periodId: period.id
+        )
+        async let subjectsTask = client.presenceSubjectStats(
+            pupilId: account.pupil.id,
+            periodId: period.id
+        )
+        async let entriesTask = client.presenceExtra(
+            pupilId: account.pupil.id,
+            from: String(period.startAt.prefix(10)),
+            to: String(period.endAt.prefix(10))
+        )
+        return AttendanceSnapshot(
+            period: period,
+            months: try await monthsTask,
+            subjects: try await subjectsTask,
+            entries: try await entriesTask
+        )
+    }
+
     func loadTimetable(weekStart: Date) async throws -> [Schedule] {
         let (_, account, client, _) = try context()
         return try await client.schedule(

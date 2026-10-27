@@ -131,6 +131,48 @@ actor HebeClient {
         ], pupilId: pupilId)
     }
 
+    // MARK: Attendance
+
+    func presenceMonthStats(pupilId: Int, periodId: Int) async throws -> [PresenceMonthStats] {
+        try await fetch(
+            [PresenceMonthStats].self,
+            path: "mobile/presence/stats/perMonth",
+            query: [
+                "pupilId": String(pupilId),
+                "periodId": String(periodId)
+            ],
+            pupilId: pupilId
+        )
+    }
+
+    func presenceSubjectStats(pupilId: Int, periodId: Int) async throws -> [PresenceSubjectStats] {
+        try await fetch(
+            [PresenceSubjectStats].self,
+            path: "mobile/presence/stats/perSubject",
+            query: [
+                "pupilId": String(pupilId),
+                "periodId": String(periodId)
+            ],
+            pupilId: pupilId
+        )
+    }
+
+    func presenceExtra(pupilId: Int, from: String, to: String) async throws -> [PresenceExtra] {
+        try await fetch(
+            [PresenceExtra].self,
+            path: "mobile/presence/extra/byPupil",
+            query: [
+                "pupilId": String(pupilId),
+                "dateFrom": from,
+                "dateTo": to,
+                "lastSyncDate": Self.epoch,
+                "lastId": "-2147483648",
+                "pageSize": "500"
+            ],
+            pupilId: pupilId
+        )
+    }
+
     func luckyNumber(pupilId: Int, constituentId: Int, day: String) async throws -> LuckyNumber? {
         let data = try await send(method: "GET", path: "mobile/school/lucky", query: [
             "pupilId": String(pupilId),

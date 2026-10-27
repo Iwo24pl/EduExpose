@@ -16,6 +16,19 @@ struct MoreView: View {
                     GlassCard {
                         VStack(spacing: 14) {
                             NavigationLink {
+                                AttendanceView()
+                            } label: {
+                                MoreRow(
+                                    icon: "calendar.badge.clock",
+                                    title: "Frekwencja",
+                                    subtitle: "Obecności, spóźnienia i zwolnienia"
+                                )
+                            }
+                            .buttonStyle(.plain)
+
+                            Divider().opacity(0.5)
+
+                            NavigationLink {
                                 HomeworkView()
                             } label: {
                                 MoreRow(
