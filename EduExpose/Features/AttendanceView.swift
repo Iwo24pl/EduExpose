@@ -69,7 +69,10 @@ struct AttendanceView: View {
 
     private func periodTitle(_ item: Period?) -> String {
         guard let item else { return "Okres" }
-        if let number = item.number {
+        if let schoolYear = AttendanceLabels.schoolYear(in: item) {
+            return "Rok szkolny \(schoolYear)"
+        }
+        if let number = item.number, number != 0 {
             return "Okres \(number)"
         }
         return "Okres"
@@ -109,39 +112,48 @@ struct AttendanceView: View {
 
     private func summary(_ snapshot: AttendanceSnapshot) -> some View {
         let totals = snapshot.totals
-        let latest = snapshot.latestMonth
+        let headline = snapshot.yearSummary ?? snapshot.latestMonth
+
+        let title: String
+        if snapshot.yearSummary != nil,
+           let schoolYear = AttendanceLabels.schoolYear(in: snapshot.period) {
+            title = "Rok szkolny \(schoolYear)"
+        } else if let headline {
+            title = AttendanceLabels.monthTitle(headline.month, in: snapshot.period)
+        } else {
+            title = "Frekwencja"
+        }
+
+        let subtitle: String
+        if snapshot.yearSummary != nil {
+            subtitle = "Frekwencja od początku roku"
+        } else if headline != nil {
+            subtitle = "Frekwencja w najnowszym miesiącu"
+        } else {
+            subtitle = "Brak statystyk miesięcznych"
+        }
 
         return GlassCard {
             VStack(alignment: .leading, spacing: 14) {
                 HStack(alignment: .center, spacing: 16) {
-                    percentageRing(latest?.percentage)
+                    percentageRing(headline?.percentage)
 
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(
-                            latest.map {
-                                AttendanceLabels.monthTitle($0.month, in: snapshot.period)
-                            } ?? "Frekwencja"
-                        )
-                        .font(.headline)
-                        .foregroundStyle(Palette.onSurface)
+                        Text(title)
+                            .font(.headline)
+                            .foregroundStyle(Palette.onSurface)
 
-                        Text(
-                            latest == nil
-                                ? "Brak statystyk miesięcznych"
-                                : "Frekwencja w najnowszym miesiącu"
-                        )
-                        .font(.caption)
-                        .foregroundStyle(Palette.onSurfaceVariant)
-                        .fixedSize(horizontal: false, vertical: true)
-
-                        if let latest {
-                            Text(
-                                "\(countLabel(latest.absences, one: "nieobecność", few: "nieobecności", many: "nieobecności")) · "
-                                    + countLabel(latest.lateArrivals, one: "spóźnienie", few: "spóźnienia", many: "spóźnień")
-                            )
-                            .font(.caption2)
+                        Text(subtitle)
+                            .font(.caption)
                             .foregroundStyle(Palette.onSurfaceVariant)
-                        }
+                            .fixedSize(horizontal: false, vertical: true)
+
+                        Text(
+                            "\(countLabel(totals.absences, one: "nieobecność", few: "nieobecności", many: "nieobecności")) · "
+                                + countLabel(totals.lateArrivals, one: "spóźnienie", few: "spóźnienia", many: "spóźnień")
+                        )
+                        .font(.caption2)
+                        .foregroundStyle(Palette.onSurfaceVariant)
                     }
 
                     Spacer(minLength: 0)
@@ -248,15 +260,23 @@ struct AttendanceView: View {
 
             GlassCard {
                 VStack(spacing: 16) {
-                    ForEach(snapshot.sortedMonths) { month in
-                        monthRow(month, period: snapshot.period)
+                    ForEach(snapshot.displayMonths) { month in
+                        monthRow(
+                            month,
+                            period: snapshot.period,
+                            totals: month.isYearSummary ? snapshot.totals : nil
+                        )
                     }
                 }
             }
         }
     }
 
-    private func monthRow(_ month: PresenceMonthStats, period: Period) -> some View {
+    private func monthRow(
+        _ month: PresenceMonthStats,
+        period: Period,
+        totals: AttendanceTotals? = nil
+    ) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline) {
                 Text(AttendanceLabels.monthTitle(month.month, in: period))
@@ -282,25 +302,29 @@ struct AttendanceView: View {
             }
             .frame(height: 6)
 
-            Text(monthDetail(month))
+            Text(monthDetail(month, totals: totals))
                 .font(.caption2)
                 .foregroundStyle(Palette.onSurfaceVariant)
         }
     }
 
-    private func monthDetail(_ month: PresenceMonthStats) -> String {
+    private func monthDetail(
+        _ month: PresenceMonthStats,
+        totals: AttendanceTotals? = nil
+    ) -> String {
+        let counts = totals ?? AttendanceTotals(month: month)
         var parts: [String] = []
-        if month.absences > 0 {
-            parts.append(countLabel(month.absences, one: "nieobecność", few: "nieobecności", many: "nieobecności"))
+        if counts.absences > 0 {
+            parts.append(countLabel(counts.absences, one: "nieobecność", few: "nieobecności", many: "nieobecności"))
         }
-        if month.lateArrivals > 0 {
-            parts.append(countLabel(month.lateArrivals, one: "spóźnienie", few: "spóźnienia", many: "spóźnień"))
+        if counts.lateArrivals > 0 {
+            parts.append(countLabel(counts.lateArrivals, one: "spóźnienie", few: "spóźnienia", many: "spóźnień"))
         }
-        if month.exemptions > 0 {
-            parts.append(countLabel(month.exemptions, one: "zwolnienie", few: "zwolnienia", many: "zwolnień"))
+        if counts.exemptions > 0 {
+            parts.append(countLabel(counts.exemptions, one: "zwolnienie", few: "zwolnienia", many: "zwolnień"))
         }
-        if month.absencesDueToSchool > 0 {
-            parts.append("\(month.absencesDueToSchool) z powodu szkoły")
+        if counts.schoolAbsences > 0 {
+            parts.append("\(counts.schoolAbsences) z powodu szkoły")
         }
         return parts.isEmpty ? "bez nieobecności" : parts.joined(separator: " · ")
     }

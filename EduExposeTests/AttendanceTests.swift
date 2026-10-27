@@ -148,6 +148,22 @@ struct AttendanceMathTests {
         #expect(AttendanceLabels.monthTitle(10, in: period) == "Październik 2025")
         #expect(AttendanceLabels.monthTitle(1, in: period) == "Styczeń 2026")
     }
+
+    @Test("Labels month zero and the school year")
+    func yearLabels() {
+        let period = Period(
+            id: 1,
+            level: nil,
+            number: 0,
+            startAt: "2026-09-01",
+            endAt: "2027-06-30",
+            current: true,
+            last: false
+        )
+
+        #expect(AttendanceLabels.monthTitle(0, in: period) == "Od początku roku")
+        #expect(AttendanceLabels.schoolYear(in: period) == "2026/27")
+    }
 }
 
 struct AttendanceSnapshotTests {
@@ -267,6 +283,103 @@ struct AttendanceSnapshotTests {
 
         #expect(snapshot.sortedMonths.map(\.month) == [9, 10, 1])
         #expect(snapshot.latestMonth?.month == 1)
+    }
+
+    @Test("Treats month zero as the year summary, not January")
+    func yearSummary() {
+        let snapshot = AttendanceSnapshot(
+            period: period(),
+            months: [
+                month(0, percentage: 90, absences: 4),
+                month(9, percentage: 100),
+                month(10, percentage: 96)
+            ],
+            subjects: [],
+            entries: []
+        )
+
+        #expect(snapshot.yearSummary?.month == 0)
+        #expect(snapshot.sortedMonths.map(\.month) == [9, 10])
+        #expect(snapshot.displayMonths.map(\.month) == [0, 9, 10])
+        #expect(snapshot.latestMonth?.month == 10)
+        #expect(snapshot.totals.absences == 4)
+    }
+
+    @Test("Falls back to monthly counts when the year summary is empty")
+    func totalsFallbackToMonths() {
+        let snapshot = AttendanceSnapshot(
+            period: period(),
+            months: [
+                month(0, percentage: 90),
+                month(9, absences: 2, late: 1)
+            ],
+            subjects: [],
+            entries: []
+        )
+
+        #expect(snapshot.totals.absences == 2)
+        #expect(snapshot.totals.lateArrivals == 1)
+    }
+
+    @Test("Fills counters the year summary leaves empty from entries")
+    func fillsMissingCountersFromEntries() {
+        let absence = type(id: 1, absence: true)
+        let late = type(id: 2, name: "Spóźnienie", absence: false, late: true)
+        let snapshot = AttendanceSnapshot(
+            period: period(),
+            months: [month(0, percentage: 90, absences: 2)],
+            subjects: [],
+            entries: [
+                entry(1, day: "2026-10-12", type: absence),
+                entry(2, day: "2026-10-13", type: late)
+            ]
+        )
+
+        #expect(snapshot.totals.absences == 2)
+        #expect(snapshot.totals.lateArrivals == 1)
+    }
+
+    @Test("Fills counters from subject statistics when needed")
+    func fillsMissingCountersFromSubjects() {
+        let subject = PresenceSubjectStats(
+            periodId: 1,
+            subjectId: 1,
+            subjectName: "Matematyka",
+            presencePercentage: 90,
+            absences: 3,
+            absencesJustified: 1,
+            lateArrivals: 1,
+            lateArrivalsJustified: 0,
+            exemptions: 0,
+            absencesDueToSchool: 0
+        )
+        let snapshot = AttendanceSnapshot(
+            period: period(),
+            months: [month(0, percentage: 90)],
+            subjects: [subject],
+            entries: []
+        )
+
+        #expect(snapshot.totals.absences == 3)
+        #expect(snapshot.totals.lateArrivals == 1)
+    }
+
+    @Test("Falls back to entries when statistics counters are empty")
+    func totalsFallbackToEntries() {
+        let absence = type(id: 1, absence: true)
+        let late = type(id: 2, name: "Spóźnienie", absence: false, late: true)
+        let snapshot = AttendanceSnapshot(
+            period: period(),
+            months: [month(0, percentage: 90)],
+            subjects: [],
+            entries: [
+                entry(1, day: "2026-10-12", type: absence),
+                entry(2, day: "2026-10-13", type: late)
+            ]
+        )
+
+        #expect(snapshot.totals.absences == 1)
+        #expect(snapshot.totals.lateArrivals == 1)
     }
 
     @Test("Sorts subjects with the lowest attendance first")

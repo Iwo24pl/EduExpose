@@ -45,6 +45,9 @@ struct PresenceMonthStats: Codable, Identifiable, Sendable {
 
     var id: Int { month }
 
+    /// `Month == 0` is the API's "od początku roku" aggregate, not January.
+    var isYearSummary: Bool { month == 0 }
+
     var percentage: Double {
         AttendanceMath.normalizedPercentage(presencePercentage)
     }
@@ -80,6 +83,78 @@ struct AttendanceTotals: Equatable, Sendable {
     var unjustified: Int {
         max(0, absences - absencesJustified)
     }
+
+    var eventCount: Int {
+        absences + lateArrivals + exemptions + schoolAbsences
+    }
+}
+
+extension AttendanceTotals {
+    init(month: PresenceMonthStats) {
+        self.init(
+            absences: month.absences,
+            absencesJustified: month.absencesJustified,
+            lateArrivals: month.lateArrivals,
+            lateArrivalsJustified: month.lateArrivalsJustified,
+            exemptions: month.exemptions,
+            schoolAbsences: month.absencesDueToSchool
+        )
+    }
+
+    init(months: [PresenceMonthStats]) {
+        self.init(
+            absences: months.reduce(0) { $0 + $1.absences },
+            absencesJustified: months.reduce(0) { $0 + $1.absencesJustified },
+            lateArrivals: months.reduce(0) { $0 + $1.lateArrivals },
+            lateArrivalsJustified: months.reduce(0) { $0 + $1.lateArrivalsJustified },
+            exemptions: months.reduce(0) { $0 + $1.exemptions },
+            schoolAbsences: months.reduce(0) { $0 + $1.absencesDueToSchool }
+        )
+    }
+
+    init(subjects: [PresenceSubjectStats]) {
+        self.init(
+            absences: subjects.reduce(0) { $0 + $1.absences },
+            absencesJustified: subjects.reduce(0) { $0 + $1.absencesJustified },
+            lateArrivals: subjects.reduce(0) { $0 + $1.lateArrivals },
+            lateArrivalsJustified: subjects.reduce(0) { $0 + $1.lateArrivalsJustified },
+            exemptions: subjects.reduce(0) { $0 + $1.exemptions },
+            schoolAbsences: subjects.reduce(0) { $0 + $1.absencesDueToSchool }
+        )
+    }
+
+    /// Fallback when the statistics payload only carries a percentage.
+    init(entries: [PresenceExtra]) {
+        var absences = 0
+        var justified = 0
+        var late = 0
+        var lateJustified = 0
+
+        for entry in entries {
+            guard let type = entry.presenceType else { continue }
+            if type.absence {
+                absences += 1
+            }
+            if type.late {
+                late += 1
+                if type.absenceJustified {
+                    lateJustified += 1
+                }
+            }
+            if type.absenceJustified {
+                justified += 1
+            }
+        }
+
+        self.init(
+            absences: absences,
+            absencesJustified: justified,
+            lateArrivals: late,
+            lateArrivalsJustified: lateJustified,
+            exemptions: 0,
+            schoolAbsences: 0
+        )
+    }
 }
 
 struct AttendanceDay: Identifiable, Sendable {
@@ -97,15 +172,27 @@ struct AttendanceSnapshot: Sendable {
 
     /// Chronological order, not numeric month order: a school year runs from
     /// September to June, so January belongs to the next calendar year.
+    /// The `Month == 0` aggregate is kept out of the month list.
     var sortedMonths: [PresenceMonthStats] {
-        months.sorted { left, right in
-            let leftYear = AttendanceLabels.year(for: left.month, in: period) ?? 0
-            let rightYear = AttendanceLabels.year(for: right.month, in: period) ?? 0
-            if leftYear != rightYear {
-                return leftYear < rightYear
+        months
+            .filter { !$0.isYearSummary }
+            .sorted { left, right in
+                let leftYear = AttendanceLabels.year(for: left.month, in: period) ?? 0
+                let rightYear = AttendanceLabels.year(for: right.month, in: period) ?? 0
+                if leftYear != rightYear {
+                    return leftYear < rightYear
+                }
+                return left.month < right.month
             }
-            return left.month < right.month
-        }
+    }
+
+    var yearSummary: PresenceMonthStats? {
+        months.first { $0.isYearSummary }
+    }
+
+    /// The aggregate first, then the individual months.
+    var displayMonths: [PresenceMonthStats] {
+        (yearSummary.map { [$0] } ?? []) + sortedMonths
     }
 
     var latestMonth: PresenceMonthStats? {
@@ -122,14 +209,26 @@ struct AttendanceSnapshot: Sendable {
         }
     }
 
+    /// Prefer the server's year aggregate, but fill any counter the statistics
+    /// leave at zero from the detailed entries (some deployments return the
+    /// percentage only in the year row).
     var totals: AttendanceTotals {
-        AttendanceTotals(
-            absences: months.reduce(0) { $0 + $1.absences },
-            absencesJustified: months.reduce(0) { $0 + $1.absencesJustified },
-            lateArrivals: months.reduce(0) { $0 + $1.lateArrivals },
-            lateArrivalsJustified: months.reduce(0) { $0 + $1.lateArrivalsJustified },
-            exemptions: months.reduce(0) { $0 + $1.exemptions },
-            schoolAbsences: months.reduce(0) { $0 + $1.absencesDueToSchool }
+        let stats: AttendanceTotals
+        if let yearSummary, AttendanceTotals(month: yearSummary).eventCount > 0 {
+            stats = AttendanceTotals(month: yearSummary)
+        } else {
+            stats = AttendanceTotals(months: sortedMonths)
+        }
+
+        let detailed = AttendanceTotals(entries: visibleEntries)
+        let subjectTotals = AttendanceTotals(subjects: subjects)
+        return AttendanceTotals(
+            absences: max(stats.absences, max(subjectTotals.absences, detailed.absences)),
+            absencesJustified: max(stats.absencesJustified, max(subjectTotals.absencesJustified, detailed.absencesJustified)),
+            lateArrivals: max(stats.lateArrivals, max(subjectTotals.lateArrivals, detailed.lateArrivals)),
+            lateArrivalsJustified: max(stats.lateArrivalsJustified, max(subjectTotals.lateArrivalsJustified, detailed.lateArrivalsJustified)),
+            exemptions: max(stats.exemptions, max(subjectTotals.exemptions, detailed.exemptions)),
+            schoolAbsences: max(stats.schoolAbsences, max(subjectTotals.schoolAbsences, detailed.schoolAbsences))
         )
     }
 
@@ -200,9 +299,24 @@ enum AttendanceLabels {
     }
 
     static func monthTitle(_ month: Int, in period: Period) -> String {
+        if month == 0 {
+            return "Od początku roku"
+        }
         if let year = year(for: month, in: period) {
             return "\(monthName(month)) \(year)"
         }
         return monthName(month)
+    }
+
+    /// `2026/27` for a period that starts in 2026 and ends in 2027.
+    static func schoolYear(in period: Period) -> String? {
+        guard let startYear = yearComponent(period.startAt) else { return nil }
+        let endYear = yearComponent(period.endAt) ?? startYear + 1
+        guard endYear > startYear else { return nil }
+        return "\(startYear)/" + String(format: "%02d", endYear % 100)
+    }
+
+    private static func yearComponent(_ raw: String) -> Int? {
+        Int(raw.prefix(4))
     }
 }
