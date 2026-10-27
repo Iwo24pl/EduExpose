@@ -34,17 +34,14 @@ actor LibrusSessionActor {
         clock: any LibrusClock = LibrusSystemClock(),
         trace: LibrusTrace = LibrusTrace(),
         onSessionUpdate: LibrusSessionObserver? = nil
-    ) async {
+    ) {
         self.session = session
         self.credentials = credentials
         self.transport = transport
-        self.jar = LibrusCookieJar()
+        self.jar = LibrusCookieJar(session?.cookies ?? [])
         self.clock = clock
         self.trace = trace
         self.onSessionUpdate = onSessionUpdate
-        if let session {
-            await jar.restore(session.cookies)
-        }
     }
 
     // MARK: Public state

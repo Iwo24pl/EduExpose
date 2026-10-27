@@ -54,8 +54,9 @@ enum LibrusMapper {
         _ averages: [String: LibrusNumber],
         subjects: [LibrusID: String]
     ) -> [GradeAverage] {
-        averages.compactMap { key, number in
-            let id = LibrusID(key)
+        averages.compactMap { entry in
+            let id = LibrusID(entry.key)
+            let number = entry.value
             guard let average = number.value.map(\.clean) ?? number.raw, !average.isEmpty else {
                 return nil
             }
