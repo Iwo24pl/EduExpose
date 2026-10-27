@@ -112,9 +112,12 @@ actor LibrusSessionActor {
         }
 
         let since = session?.loginCount ?? 0
-        let refreshedRecently = session?.lastRefreshAt.map {
-            clock.now.timeIntervalSince($0) < 2 * 60
-        } ?? false
+        let refreshedRecently: Bool
+        if let lastRefreshAt = session?.lastRefreshAt {
+            refreshedRecently = clock.now.timeIntervalSince(lastRefreshAt) < 2 * 60
+        } else {
+            refreshedRecently = false
+        }
         var didRefresh = refreshedRecently
         var didLogin = false
 
