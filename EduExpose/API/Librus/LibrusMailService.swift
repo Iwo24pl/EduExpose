@@ -28,9 +28,10 @@ actor LibrusMailService: MailService {
 
     func messages(kind: MessageKind) async throws -> [MailMessage] {
         let mailbox = Self.mailbox(for: kind)
+        let client = self.client
         do {
             let envelope = try await withMessages {
-                try await self.client.messages(mailbox: mailbox, limit: 100, page: 1)
+                try await client.messages(mailbox: mailbox, limit: 100, page: 1)
             }
             return (envelope.data ?? []).compactMap { summary in
                 guard let id = summary.messageId?.raw, !id.isEmpty else { return nil }
@@ -55,11 +56,12 @@ actor LibrusMailService: MailService {
     }
 
     func detail(id: String) async throws -> MailMessageDetail {
-        try await withMessages {
+        let client = self.client
+        return try await withMessages {
             var lastError: any Error = LibrusError.httpStatus(404)
             for mailbox in ["inbox", "outbox", "trash"] {
                 do {
-                    let envelope = try await self.client.message(mailbox: mailbox, id: id)
+                    let envelope = try await client.message(mailbox: mailbox, id: id)
                     if let detail = envelope.data {
                         return self.detail(from: detail, fallbackID: id)
                     }
