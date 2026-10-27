@@ -185,7 +185,7 @@ actor LibrusMailService: MailService {
         )
     }
 
-    private func join(_ first: String?, _ last: String?) -> String {
+    private nonisolated func join(_ first: String?, _ last: String?) -> String {
         [first, last]
             .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
