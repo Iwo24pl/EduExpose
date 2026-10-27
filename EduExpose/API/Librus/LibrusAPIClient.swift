@@ -111,10 +111,14 @@ struct LibrusAPIClient: Sendable {
                 return false
             }
             return true
-        } catch LibrusError.moduleUnavailable(_, 403) {
-            return false
-        } catch LibrusError.httpStatus(404) {
-            return false
+        } catch let error as LibrusError {
+            if case .moduleUnavailable(_, 403) = error {
+                return false
+            }
+            if case .httpStatus(404) = error {
+                return false
+            }
+            throw error
         }
     }
 

@@ -114,14 +114,16 @@ actor LibrusMailService: MailService {
     // MARK: Messages session
 
     private func withMessages<T>(_ operation: () async throws -> T) async throws -> T {
-        guard try await requireMessages() else {
+        let ready = try await requireMessages()
+        guard ready else {
             throw LibrusError.moduleUnavailable(endpoint: "wiadomosci", status: 403)
         }
         do {
             return try await operation()
         } catch {
             messagesAvailable = nil
-            guard try await requireMessages() else {
+            let retried = try await requireMessages()
+            guard retried else {
                 throw error
             }
             return try await operation()
