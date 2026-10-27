@@ -1,5 +1,4 @@
 import Foundation
-import Security
 
 /// A transport-neutral request. The session actor adds the cookie header;
 /// the transport never reads the shared cookie storage.
