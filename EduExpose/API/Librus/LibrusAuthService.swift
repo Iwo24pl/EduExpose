@@ -26,9 +26,13 @@ struct LibrusAuthService: RegistryAuthService {
     }
 
     func signIn(login: String, password: String) async throws -> [RegistryStudent] {
+        let trimmedLogin = login.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedLogin.isEmpty, !password.isEmpty else {
+            throw LibrusError.invalidCredentials
+        }
         let actor = LibrusSessionActor(
             session: nil,
-            credentials: LibrusCredentials(login: login, password: password),
+            credentials: LibrusCredentials(login: trimmedLogin, password: password),
             transport: transport,
             clock: clock,
             trace: trace,
