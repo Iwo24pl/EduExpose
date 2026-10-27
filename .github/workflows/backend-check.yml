@@ -1,0 +1,59 @@
+name: Backend typecheck
+
+on:
+  pull_request:
+    branches: [swift]
+    paths:
+      - "EduExpose/API/Registry/**"
+      - "EduExpose/API/Librus/**"
+      - "EduExpose/API/Models.swift"
+      - "EduExpose/API/MailModels.swift"
+      - "EduExpose/API/HTMLForm.swift"
+      - "EduExposeTests/Librus*.swift"
+      - "EduExposeTests/Registry*.swift"
+      - "BackendCheck/**"
+  workflow_dispatch:
+
+jobs:
+  typecheck:
+    name: Linux typecheck
+    runs-on: ubuntu-latest
+    container: swift:6.1
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Assemble module
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf BackendCheck/Sources BackendCheck/Tests
+          mkdir -p BackendCheck/Sources/EduExpose BackendCheck/Tests/EduExposeTests
+
+          cp EduExpose/API/Models.swift EduExpose/API/MailModels.swift EduExpose/API/HTMLForm.swift BackendCheck/Sources/EduExpose/
+          cp EduExpose/API/Registry/*.swift BackendCheck/Sources/EduExpose/
+          cp EduExpose/API/Librus/*.swift BackendCheck/Sources/EduExpose/
+          cp BackendCheck/Stubs.swift BackendCheck/Sources/EduExpose/
+
+          cp EduExposeTests/LibrusCookieTests.swift \
+             EduExposeTests/LibrusMappingTests.swift \
+             EduExposeTests/LibrusSessionTests.swift \
+             EduExposeTests/RegistryModelTests.swift \
+             BackendCheck/Tests/EduExposeTests/
+
+          for file in BackendCheck/Sources/EduExpose/*.swift; do
+            if grep -qE "URLSession|HTTPURLResponse|URLError|HTTPCookie" "$file"; then
+              sed -i '1i import FoundationNetworking' "$file"
+            fi
+          done
+
+          sed -i '/^import os$/d' BackendCheck/Sources/EduExpose/LibrusTrace.swift
+          sed -i '/tlsMinimumSupportedProtocolVersion/d' BackendCheck/Sources/EduExpose/LibrusTransport.swift
+
+      - name: Build and test
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd BackendCheck
+          swift build --build-tests
+          swift test

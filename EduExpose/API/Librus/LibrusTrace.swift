@@ -46,7 +46,7 @@ actor LibrusTrace {
         }
         // Stage, endpoint and status are deliberately non-sensitive; the
         // note is an enumerated code, never server text.
-        logger.debug("\(stage, privacy: .public) \(endpoint ?? "-", privacy: .public) \(status ?? 0, privacy: .public)")
+        logger.debug("\(stage) \(endpoint ?? "-") \(status ?? 0)")
     }
 
     func snapshot() -> [LibrusTraceEvent] {
