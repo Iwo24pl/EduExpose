@@ -43,7 +43,7 @@ struct LibrusCookie: Codable, Sendable, Hashable {
     static func parse(_ header: String, for url: URL, now: Date = Date()) -> LibrusCookie? {
         let parts = header
             .split(separator: ";", omittingEmptySubsequences: true)
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
         guard let first = parts.first,
               let separator = first.firstIndex(of: "=") else {
             return nil
@@ -67,9 +67,9 @@ struct LibrusCookie: Codable, Sendable, Hashable {
 
         for attribute in parts.dropFirst() {
             let pair = attribute.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
-            let key = pair[0].trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            let key = String(pair[0]).trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             let rawValue = pair.count > 1
-                ? pair[1].trimmingCharacters(in: .whitespacesAndNewlines)
+                ? String(pair[1]).trimmingCharacters(in: .whitespacesAndNewlines)
                 : ""
             switch key {
             case "domain":

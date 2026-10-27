@@ -52,11 +52,9 @@ struct LibrusHTTPResponse: Sendable {
 
     private static func stringEncoding(from contentType: String) -> String.Encoding? {
         guard let range = contentType.range(of: "charset=") else { return nil }
-        let raw = contentType[range.upperBound...]
-            .split(separator: ";", maxSplits: 1)
-            .first?
-            .trimmingCharacters(in: CharacterSet(charactersIn: "\"' "))
-            ?? ""
+        let tail = contentType[range.upperBound...]
+        let first = tail.split(separator: ";", maxSplits: 1).first.map(String.init) ?? ""
+        let raw = first.trimmingCharacters(in: CharacterSet(charactersIn: "\"' "))
         switch raw.lowercased() {
         case "utf-8", "utf8":
             return .utf8
