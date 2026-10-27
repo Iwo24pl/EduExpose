@@ -58,7 +58,7 @@ struct LibrusMappingTests {
         #expect(mapped.first?.comment == "Bardzo dobrze")
         #expect(mapped.first?.column.subject.name == "Matematyka")
         #expect(mapped.first?.column.periodId == 1)
-        #expect(mapped.first?.column.weight == 2)
+        #expect(mapped.first?.column.weight == 2.0)
     }
 
     @Test("Grade values follow Librus plus/minus rules")

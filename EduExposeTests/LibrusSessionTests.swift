@@ -173,7 +173,7 @@ struct LibrusSessionTests {
         let transport = MockLibrusTransport()
         enqueueLogin(transport)
         let clock = FakeLibrusClock(baseDate)
-        let actor = await LibrusSessionActor(
+        let actor = LibrusSessionActor(
             session: nil,
             credentials: LibrusCredentials(login: "user@example.com", password: "secret"),
             transport: transport,
@@ -196,7 +196,7 @@ struct LibrusSessionTests {
     func invalidCredentials() async {
         let transport = MockLibrusTransport()
         enqueueLogin(transport, failureBody: #"{"status":"error"}"#)
-        let actor = await LibrusSessionActor(
+        let actor = LibrusSessionActor(
             session: nil,
             credentials: LibrusCredentials(login: "user", password: "wrong"),
             transport: transport,
@@ -218,7 +218,7 @@ struct LibrusSessionTests {
     func captcha() async {
         let transport = MockLibrusTransport()
         enqueueLogin(transport, captcha: true)
-        let actor = await LibrusSessionActor(
+        let actor = LibrusSessionActor(
             session: nil,
             credentials: LibrusCredentials(login: "user", password: "secret"),
             transport: transport,
@@ -250,7 +250,7 @@ struct LibrusSessionTests {
             url.path == "/gateway/api/2.0/Me"
         }, .init(status: 200, body: Data("{}".utf8)))
 
-        let actor = await LibrusSessionActor(
+        let actor = LibrusSessionActor(
             session: makeSession(now: baseDate, age: 3 * 3600),
             credentials: LibrusCredentials(login: "user", password: "secret"),
             transport: transport,
@@ -285,7 +285,7 @@ struct LibrusSessionTests {
             url.path == "/gateway/api/2.0/Me"
         }, .init(status: 200, body: Data("{}".utf8)))
 
-        let actor = await LibrusSessionActor(
+        let actor = LibrusSessionActor(
             session: makeSession(),
             credentials: LibrusCredentials(login: "user", password: "secret"),
             transport: transport,
@@ -320,7 +320,7 @@ struct LibrusSessionTests {
             url.path == "/gateway/api/2.0/Me"
         }, .init(status: 200, body: Data("{}".utf8)))
 
-        let actor = await LibrusSessionActor(
+        let actor = LibrusSessionActor(
             session: makeSession(),
             credentials: LibrusCredentials(login: "user", password: "secret"),
             transport: transport,
@@ -342,7 +342,7 @@ struct LibrusSessionTests {
         let transport = MockLibrusTransport()
         transport.enqueue({ _ in true }, .init(status: 403))
 
-        let actor = await LibrusSessionActor(
+        let actor = LibrusSessionActor(
             session: makeSession(),
             credentials: LibrusCredentials(login: "user", password: "secret"),
             transport: transport,
@@ -373,7 +373,7 @@ struct LibrusSessionTests {
             body: Data(#"{"Message":"Insufficient scopes"}"#.utf8)
         ))
 
-        let actor = await LibrusSessionActor(
+        let actor = LibrusSessionActor(
             session: makeSession(),
             credentials: LibrusCredentials(login: "user", password: "secret"),
             transport: transport,
@@ -400,7 +400,7 @@ struct LibrusSessionTests {
         let transport = MockLibrusTransport()
         transport.enqueue({ _ in true }, .init(status: 503))
 
-        let actor = await LibrusSessionActor(
+        let actor = LibrusSessionActor(
             session: makeSession(),
             credentials: LibrusCredentials(login: "user", password: "secret"),
             transport: transport,
@@ -424,7 +424,7 @@ struct LibrusSessionTests {
         let transport = MockLibrusTransport()
         enqueueLogin(transport, failureBody: #"{"status":"error"}"#)
         let clock = FakeLibrusClock(baseDate)
-        let actor = await LibrusSessionActor(
+        let actor = LibrusSessionActor(
             session: nil,
             credentials: LibrusCredentials(login: "user", password: "wrong"),
             transport: transport,

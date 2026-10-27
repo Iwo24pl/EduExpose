@@ -26,7 +26,7 @@ struct LibrusAuthService: RegistryAuthService {
     }
 
     func signIn(login: String, password: String) async throws -> [RegistryStudent] {
-        let actor = await LibrusSessionActor(
+        let actor = LibrusSessionActor(
             session: nil,
             credentials: LibrusCredentials(login: login, password: password),
             transport: transport,
@@ -60,7 +60,7 @@ struct LibrusAuthService: RegistryAuthService {
         guard case let .librus(session) = student.session else {
             throw LibrusError.missingSession
         }
-        return await LibrusSessionActor(
+        return LibrusSessionActor(
             session: session,
             credentials: LibrusCredentials(login: session.login, password: session.password),
             transport: transport,

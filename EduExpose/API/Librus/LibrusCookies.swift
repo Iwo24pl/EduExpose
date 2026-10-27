@@ -188,7 +188,8 @@ actor LibrusCookieJar {
     private var cookies: [LibrusCookie] = []
 
     init(_ cookies: [LibrusCookie] = []) {
-        self.cookies = cookies
+        let now = Date()
+        self.cookies = cookies.filter { !$0.isExpired(at: now) }
     }
 
     func restore(_ cookies: [LibrusCookie]) {
