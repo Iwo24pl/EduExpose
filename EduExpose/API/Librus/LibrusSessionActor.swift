@@ -98,9 +98,20 @@ actor LibrusSessionActor {
                     return refreshed
                 }
             }
+            // A failed refresh alone is not proof that the session is dead.
+            // Keep using it while it is inside its lifetime; a real 401 will
+            // force the login path from `send`.
+            if isValid(current) {
+                return current
+            }
             return try await loginShared()
         }
         return current
+    }
+
+    private func isValid(_ session: LibrusSession) -> Bool {
+        let age = clock.now.timeIntervalSince(session.loggedInAt)
+        return age < LibrusConstants.sessionLifetime - LibrusConstants.sessionSafetyMargin
     }
 
     /// Sends one request. `authenticated` is false only for raw transport
