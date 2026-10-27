@@ -17,19 +17,20 @@ permissions:
 env:
   SCHEME: EduExpose
   PROJECT: EduExpose.xcodeproj
+  XCODE_VERSION: "26.6"
 
 jobs:
-  build-test-package:
-    name: Build, test, package
-    runs-on: macos-latest
-    timeout-minutes: 50
+  test:
+    name: Build, test, smoke
+    runs-on: macos-26
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
 
-      - name: Select newest Xcode
+      - name: Select Xcode
         uses: maxim-lobanov/setup-xcode@v1
         with:
-          xcode-version: latest-stable
+          xcode-version: ${{ env.XCODE_VERSION }}
 
       - name: Install XcodeGen
         run: brew install xcodegen
@@ -60,9 +61,7 @@ jobs:
           PY
 
       - name: Show toolchain
-        run: |
-          xcodebuild -version
-          xcrun simctl list runtimes
+        run: xcodebuild -version
 
       - name: Build and test
         shell: bash
@@ -70,12 +69,16 @@ jobs:
           set -euo pipefail
           UDID=$(python3 .github/scripts/pick_simulator.py)
           echo "Using simulator $UDID"
+          echo "SIM_UDID=$UDID" >> "$GITHUB_ENV"
           set +e
           xcodebuild -project "$PROJECT" -scheme "$SCHEME" \
             -destination "id=$UDID" \
             -destination-timeout 120 \
             -resultBundlePath TestResults.xcresult \
+            -enableCodeCoverage NO \
             CODE_SIGNING_ALLOWED=NO \
+            ONLY_ACTIVE_ARCH=YES \
+            COMPILER_INDEX_STORE_ENABLE=NO \
             test 2>&1 | tee build.log
           status=${PIPESTATUS[0]}
           exit $status
@@ -93,7 +96,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          UDID=$(python3 .github/scripts/pick_simulator.py)
+          UDID="${SIM_UDID:?simulator id missing}"
           APP=$(find "$HOME/Library/Developer/Xcode/DerivedData" \
             -path "*/Build/Products/Debug-iphonesimulator/EduExpose.app" \
             -print -quit)
@@ -101,8 +104,7 @@ jobs:
             echo "EduExpose.app was not built"
             exit 1
           fi
-          echo "Installing $APP"
-          xcrun simctl boot "$UDID" || true
+          echo "Installing $APP on $UDID"
           xcrun simctl bootstatus "$UDID" -b
           xcrun simctl terminate "$UDID" com.iwo24pl.eduexpose || true
           xcrun simctl install "$UDID" "$APP"
@@ -131,12 +133,15 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload build log
+      - name: Upload test artifacts
         if: always()
         uses: actions/upload-artifact@v5
         with:
-          name: build-log
-          path: build.log
+          name: test-artifacts
+          path: |
+            build.log
+            test-summary.json
+            login.png
           if-no-files-found: ignore
 
       - name: Upload test results
@@ -144,10 +149,7 @@ jobs:
         uses: actions/upload-artifact@v5
         with:
           name: test-results
-          path: |
-            TestResults.xcresult
-            test-summary.json
-            login.png
+          path: TestResults.xcresult
           if-no-files-found: ignore
 
       - name: Publish failing build log
@@ -166,6 +168,24 @@ jobs:
             build.log
             test-summary.json
 
+  package:
+    name: Build IPA
+    runs-on: macos-26
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: ${{ env.XCODE_VERSION }}
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate project
+        run: xcodegen generate
+
       - name: Build unsigned archive
         shell: bash
         run: |
@@ -179,7 +199,8 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
-            2>&1 | tee -a build.log
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            2>&1 | tee package-build.log
 
       - name: Package unsigned IPA
         shell: bash
@@ -195,13 +216,41 @@ jobs:
       - name: Upload IPA
         uses: actions/upload-artifact@v5
         with:
-          name: EduExpose-unsigned-ipa
+          name: ipa
           path: |
             EduExpose-unsigned.ipa
             EduExpose-unsigned.ipa.sha256
 
+      - name: Upload package log
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: package-log
+          path: package-build.log
+          if-no-files-found: ignore
+
+  publish:
+    name: Publish rolling prerelease
+    needs: [test, package]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/swift'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Download IPA
+        uses: actions/download-artifact@v5
+        with:
+          name: ipa
+          path: .
+
+      - name: Download test artifacts
+        uses: actions/download-artifact@v5
+        with:
+          name: test-artifacts
+          path: .
+
       - name: Publish rolling prerelease
-        if: github.event_name == 'push' && github.ref == 'refs/heads/swift'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest
