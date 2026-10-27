@@ -29,22 +29,22 @@ final class MockLibrusTransport: LibrusTransport, @unchecked Sendable {
     }
 
     func send(_ request: LibrusRequest) async throws -> LibrusHTTPResponse {
-        lock.lock()
-        recorded.append(request)
-        guard let index = entries.firstIndex(where: {
-            $0.matcher(request.url) && !$0.replies.isEmpty
-        }) else {
-            lock.unlock()
-            throw LibrusTransportError.network
+        let reply = try withLock { () throws -> Reply in
+            recorded.append(request)
+            guard let index = entries.firstIndex(where: {
+                $0.matcher(request.url) && !$0.replies.isEmpty
+            }) else {
+                throw LibrusTransportError.network
+            }
+            var entry = entries[index]
+            let reply = entry.replies.removeFirst()
+            if entry.replies.isEmpty {
+                entries.remove(at: index)
+            } else {
+                entries[index] = entry
+            }
+            return reply
         }
-        var entry = entries[index]
-        let reply = entry.replies.removeFirst()
-        if entry.replies.isEmpty {
-            entries.remove(at: index)
-        } else {
-            entries[index] = entry
-        }
-        lock.unlock()
         return LibrusHTTPResponse(
             url: reply.url ?? request.url,
             status: reply.status,
@@ -52,6 +52,12 @@ final class MockLibrusTransport: LibrusTransport, @unchecked Sendable {
             setCookie: reply.setCookie,
             body: reply.body
         )
+    }
+
+    private func withLock<T>(_ body: () throws -> T) rethrows -> T {
+        lock.lock()
+        defer { lock.unlock() }
+        return try body()
     }
 
     var requests: [LibrusRequest] {
