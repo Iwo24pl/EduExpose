@@ -223,13 +223,17 @@ struct AttendanceSnapshot: Sendable {
         let detailed = AttendanceTotals(entries: visibleEntries)
         let subjectTotals = AttendanceTotals(subjects: subjects)
         return AttendanceTotals(
-            absences: max(stats.absences, max(subjectTotals.absences, detailed.absences)),
-            absencesJustified: max(stats.absencesJustified, max(subjectTotals.absencesJustified, detailed.absencesJustified)),
-            lateArrivals: max(stats.lateArrivals, max(subjectTotals.lateArrivals, detailed.lateArrivals)),
-            lateArrivalsJustified: max(stats.lateArrivalsJustified, max(subjectTotals.lateArrivalsJustified, detailed.lateArrivalsJustified)),
-            exemptions: max(stats.exemptions, max(subjectTotals.exemptions, detailed.exemptions)),
-            schoolAbsences: max(stats.schoolAbsences, max(subjectTotals.schoolAbsences, detailed.schoolAbsences))
+            absences: fill(stats.absences, from: max(subjectTotals.absences, detailed.absences)),
+            absencesJustified: fill(stats.absencesJustified, from: max(subjectTotals.absencesJustified, detailed.absencesJustified)),
+            lateArrivals: fill(stats.lateArrivals, from: max(subjectTotals.lateArrivals, detailed.lateArrivals)),
+            lateArrivalsJustified: fill(stats.lateArrivalsJustified, from: max(subjectTotals.lateArrivalsJustified, detailed.lateArrivalsJustified)),
+            exemptions: fill(stats.exemptions, from: max(subjectTotals.exemptions, detailed.exemptions)),
+            schoolAbsences: fill(stats.schoolAbsences, from: max(subjectTotals.schoolAbsences, detailed.schoolAbsences))
         )
+    }
+
+    private func fill(_ value: Int, from fallback: Int) -> Int {
+        value > 0 ? value : fallback
     }
 
     var visibleEntries: [PresenceExtra] {
@@ -290,12 +294,8 @@ enum AttendanceLabels {
 
     /// The year a month belongs to inside a school-year period.
     static func year(for month: Int, in period: Period) -> Int? {
-        let parts = period.startAt
-            .prefix(10)
-            .split(separator: "-")
-            .compactMap { Int($0) }
-        guard parts.count >= 2 else { return nil }
-        return month >= parts[1] ? parts[0] : parts[0] + 1
+        guard let start = yearMonth(period.startAt) else { return nil }
+        return month >= start.month ? start.year : start.year + 1
     }
 
     static func monthTitle(_ month: Int, in period: Period) -> String {
@@ -308,15 +308,24 @@ enum AttendanceLabels {
         return monthName(month)
     }
 
-    /// `2026/27` for a period that starts in 2026 and ends in 2027.
+    /// `2026/27` only for a period that spans the whole school year. A single
+    /// semester keeps its "Okres N" label.
     static func schoolYear(in period: Period) -> String? {
-        guard let startYear = yearComponent(period.startAt) else { return nil }
-        let endYear = yearComponent(period.endAt) ?? startYear + 1
-        guard endYear > startYear else { return nil }
-        return "\(startYear)/" + String(format: "%02d", endYear % 100)
+        guard let start = yearMonth(period.startAt),
+              let end = yearMonth(period.endAt),
+              end.year > start.year,
+              end.month >= 6 else {
+            return nil
+        }
+        return "\(start.year)/" + String(format: "%02d", end.year % 100)
     }
 
-    private static func yearComponent(_ raw: String) -> Int? {
-        Int(raw.prefix(4))
+    private static func yearMonth(_ raw: String) -> (year: Int, month: Int)? {
+        let parts = raw
+            .prefix(10)
+            .split(separator: "-")
+            .compactMap { Int($0) }
+        guard parts.count >= 2 else { return nil }
+        return (parts[0], parts[1])
     }
 }
