@@ -206,7 +206,15 @@ actor LibrusCookieJar {
                 }
                 remove(cookie)
                 if !cookie.isExpired(at: now) {
-                    cookies.append(cookie)
+                    var stored = cookie
+                    // The actor owns the session lifetime. Librus sends a
+                    // short Max-Age and re-issues the cookie; keeping it as a
+                    // session cookie avoids dropping a still-valid login on
+                    // a cold launch between reissues.
+                    if stored.name == LibrusConstants.oauthTokenCookie {
+                        stored.expiresAt = nil
+                    }
+                    cookies.append(stored)
                 }
             }
         }
