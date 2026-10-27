@@ -20,6 +20,10 @@ jobs:
     runs-on: ubuntu-latest
     container: swift:6.1
     timeout-minutes: 15
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
     steps:
       - uses: actions/checkout@v5
 
@@ -55,5 +59,31 @@ jobs:
         run: |
           set -euo pipefail
           cd BackendCheck
-          swift build --build-tests
-          swift test
+          swift build --build-tests 2>&1 | tee ../backend-build.log
+          swift test 2>&1 | tee -a ../backend-build.log
+
+      - name: Comment failure excerpt
+        if: failure() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = 'backend-build.log';
+            if (!fs.existsSync(path)) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: '### Backend typecheck failure\nNo log file was produced.'
+              });
+              return;
+            }
+            const text = fs.readFileSync(path, 'utf8');
+            const lines = text.split('\n').filter(line => /error:|warning:|failed/.test(line));
+            const excerpt = (lines.length ? lines.slice(-100).join('\n') : text.slice(-12000)).slice(0, 60000);
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: '### Backend typecheck failure\n```\n' + excerpt + '\n```'
+            });
