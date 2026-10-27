@@ -9,6 +9,7 @@ struct LibrusRequest: Sendable {
     var headers: [String: String] = [:]
     var body: Data?
     var timeout: TimeInterval = LibrusConstants.requestTimeout
+    var followsRedirects: Bool = false
 }
 
 struct LibrusHTTPResponse: Sendable {

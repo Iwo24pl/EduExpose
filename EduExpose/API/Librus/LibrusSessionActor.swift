@@ -120,11 +120,13 @@ actor LibrusSessionActor {
         }
         var didRefresh = refreshedRecently
         var didLogin = false
+        var currentRequest = request
+        var redirects = 0
 
-        for _ in 0..<3 {
+        for _ in 0..<8 {
             let response: LibrusHTTPResponse
             do {
-                response = try await sendRaw(request)
+                response = try await sendRaw(currentRequest)
             } catch let error as LibrusError {
                 throw error
             } catch is CancellationError {
@@ -140,6 +142,17 @@ actor LibrusSessionActor {
             switch response.status {
             case 200..<300:
                 return response
+
+            case 300..<400:
+                guard currentRequest.followsRedirects,
+                      redirects < 5,
+                      let location = response.header("location"),
+                      let next = LibrusHosts.resolve(location, relativeTo: response.url) else {
+                    throw LibrusError.unsafeRedirect
+                }
+                redirects += 1
+                currentRequest.url = next
+                continue
 
             case 401:
                 if LibrusHosts.isDataGateway(response.url),
@@ -179,9 +192,6 @@ actor LibrusSessionActor {
 
             case 502, 504:
                 throw LibrusError.retryLater(status: response.status)
-
-            case 300..<400:
-                throw LibrusError.unsafeRedirect
 
             default:
                 throw LibrusError.httpStatus(response.status)
