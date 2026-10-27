@@ -372,12 +372,12 @@ struct LibrusUnread: Decodable {
     let trash: Int?
 }
 
-struct LibrusMessageListEnvelope: Decodable {
+struct LibrusMessageListEnvelope: Decodable, Sendable {
     let data: [LibrusMessageSummary]?
     let total: Int?
 }
 
-struct LibrusMessageSummary: Decodable {
+struct LibrusMessageSummary: Decodable, Sendable {
     let messageId: LibrusID?
     let senderName: String?
     let senderFirstName: String?

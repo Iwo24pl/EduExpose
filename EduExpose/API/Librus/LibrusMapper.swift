@@ -14,7 +14,10 @@ enum LibrusMapper {
     ) -> [Grade] {
         grades.map { grade in
             let category = grade.category.flatMap { categories[$0.id] }
-            let subject = subject(grade.subject?.id, name: grade.subject?.id.flatMap { subjects[$0] })
+            let subject = subject(
+                grade.subject?.id,
+                name: (grade.subject?.id).flatMap { subjects[$0] }
+            )
             let comment = grade.comments?
                 .compactMap { comments[$0.id] }
                 .filter { !$0.isEmpty }
@@ -183,7 +186,7 @@ enum LibrusMapper {
         users: [LibrusID: String]
     ) -> [Exam] {
         events.map { event in
-            let categoryName = event.category?.id.flatMap { categories[$0] } ?? "Sprawdzian"
+            let categoryName = (event.category?.id).flatMap { categories[$0] } ?? "Sprawdzian"
             let subjectID = event.subject?.id
             let subjectName = subjectID.flatMap { subjects[$0] } ?? "Szkoła"
             let creatorID = event.createdBy?.id
