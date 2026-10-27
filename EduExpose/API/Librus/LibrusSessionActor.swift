@@ -93,8 +93,10 @@ actor LibrusSessionActor {
             return try await loginShared()
         }
         if age >= LibrusConstants.sessionRefreshAfter {
-            if await refreshShared(), let refreshed = session {
-                return refreshed
+            if await refreshShared() {
+                if let refreshed = session {
+                    return refreshed
+                }
             }
             return try await loginShared()
         }
@@ -457,8 +459,11 @@ actor LibrusSessionActor {
         let response: LibrusHTTPResponse
         do {
             response = try await transport.send(outgoing)
-        } catch LibrusTransportError.cancelled {
-            throw CancellationError()
+        } catch let error as LibrusTransportError {
+            if case .cancelled = error {
+                throw CancellationError()
+            }
+            throw LibrusError.network
         } catch {
             throw LibrusError.network
         }

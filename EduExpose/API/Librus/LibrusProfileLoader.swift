@@ -26,8 +26,10 @@ struct LibrusProfileLoader: Sendable {
             schoolClass = envelope.schoolClass
         }
         var userRecord: LibrusUser?
-        if let studentID, let envelope = try? await client.user(id: studentID) {
-            userRecord = envelope.user
+        if let studentID {
+            if let envelope = try? await client.user(id: studentID) {
+                userRecord = envelope.user
+            }
         }
 
         let firstName = student?.firstName ?? loginAccount?.firstName ?? "Uczeń"
