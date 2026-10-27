@@ -100,7 +100,6 @@ final class URLSessionLibrusTransport: LibrusTransport, @unchecked Sendable {
         configuration.timeoutIntervalForRequest = LibrusConstants.requestTimeout
         configuration.timeoutIntervalForResource = LibrusConstants.resourceTimeout
         configuration.httpMaximumConnectionsPerHost = 4
-        configuration.tlsMinimumSupportedProtocolVersion = .TLSv12
         return configuration
     }
 
