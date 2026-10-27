@@ -113,7 +113,7 @@ actor LibrusMailService: MailService {
 
     // MARK: Messages session
 
-    private func withMessages<T>(_ operation: () async throws -> T) async throws -> T {
+    private func withMessages<T: Sendable>(_ operation: @Sendable () async throws -> T) async throws -> T {
         let ready = try await requireMessages()
         guard ready else {
             throw LibrusError.moduleUnavailable(endpoint: "wiadomosci", status: 403)
@@ -161,7 +161,7 @@ actor LibrusMailService: MailService {
         }
     }
 
-    private func detail(from detail: LibrusMessageDetail, fallbackID: String) -> MailMessageDetail {
+    private nonisolated func detail(from detail: LibrusMessageDetail, fallbackID: String) -> MailMessageDetail {
         let attachments = (detail.attachments ?? []).map { attachment in
             MailAttachment(
                 id: attachment.id?.raw ?? UUID().uuidString,

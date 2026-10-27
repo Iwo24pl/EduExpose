@@ -99,7 +99,6 @@ final class URLSessionLibrusTransport: LibrusTransport, @unchecked Sendable {
         configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
         configuration.timeoutIntervalForRequest = LibrusConstants.requestTimeout
         configuration.timeoutIntervalForResource = LibrusConstants.resourceTimeout
-        configuration.waitsForConnectivity = false
         configuration.httpMaximumConnectionsPerHost = 4
         configuration.tlsMinimumSupportedProtocolVersion = .TLSv12
         return configuration

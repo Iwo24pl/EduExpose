@@ -387,7 +387,7 @@ actor LibrusSessionActor {
             body: Data(form.utf8)
         ))
         try checkRetryLater(loginResponse)
-        if containsCaptcha(loginResponse.text) {
+        if Self.containsCaptcha(loginResponse.text) {
             throw LibrusError.captchaRequired
         }
         if loginResponse.status == 400 || loginResponse.status == 401 {
@@ -409,7 +409,7 @@ actor LibrusSessionActor {
         while true {
             let response = try await sendRaw(LibrusRequest(url: currentURL))
             try checkRetryLater(response)
-            if containsCaptcha(response.text) {
+            if Self.containsCaptcha(response.text) {
                 throw LibrusError.captchaRequired
             }
             if response.text.contains("rejected_client") {
