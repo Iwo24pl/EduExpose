@@ -313,7 +313,7 @@ final class AppModel {
 
     // MARK: Loading
 
-    private struct Context {
+    private struct Context: Sendable {
         let student: RegistryStudent
         let account: Account
         let journal: any JournalService

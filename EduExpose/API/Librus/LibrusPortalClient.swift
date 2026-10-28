@@ -91,9 +91,9 @@ actor LibrusPortalClient: LibrusPortalBridging {
         await trace.record("portal.login.start")
         let code = try await authorizationCode()
         let token = try await exchange(code: code)
-        let accounts = try await accounts(accessToken: token.accessToken)
+        let children = try await accounts(accessToken: token.accessToken)
 
-        let usable = accounts.filter { account in
+        let usable = children.filter { account in
             let state = (account.state ?? "").lowercased()
             return state != "requiring_an_action" && state != "need-activation"
         }
