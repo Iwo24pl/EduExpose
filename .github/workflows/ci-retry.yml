@@ -60,13 +60,16 @@ jobs:
           fi
 
           jobs=$(gh api "repos/$REPO/actions/runs/$id/jobs?per_page=100")
-          mac_total=$(jq '[.jobs[] | select((.labels | join(",")) | test("macos"))] | length' <<<"$jobs")
-          mac_without_runner=$(jq '[.jobs[] | select((.labels | join(",")) | test("macos")) | select(.runner_name == null or .runner_name == "")] | length' <<<"$jobs")
+          mac_jobs=$(jq '[.jobs[] | select((.labels | join(",")) | test("macos"))]' <<<"$jobs")
+          mac_total=$(jq 'length' <<<"$mac_jobs")
+          # A starved job either never gets a runner, or gets one that never comes
+          # online. In both cases no step ever concludes, so count those.
+          mac_never_started=$(jq '[.[] | select(([.steps[]? | select(.conclusion != null and .conclusion != "")] | length) == 0)] | length' <<<"$mac_jobs")
 
-          if [ "$mac_total" -eq 0 ] || [ "$mac_without_runner" -ne "$mac_total" ]; then
-            echo "Run $id failed after a runner was assigned; not a provisioning failure."
+          if [ "$mac_total" -eq 0 ] || [ "$mac_never_started" -ne "$mac_total" ]; then
+            echo "Run $id failed after the macOS job actually started; not a provisioning failure."
             exit 0
           fi
 
-          echo "Re-running $id (attempt $attempt, $mac_without_runner/$mac_total macOS jobs never got a runner)."
+          echo "Re-running $id (attempt $attempt, $mac_never_started/$mac_total macOS jobs never started)."
           gh api -X POST "repos/$REPO/actions/runs/$id/rerun"
