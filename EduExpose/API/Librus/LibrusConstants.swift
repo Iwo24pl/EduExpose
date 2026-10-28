@@ -34,6 +34,8 @@ enum LibrusConstants {
 
     static let userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         + "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36"
+    /// Konto LIBRUS and AutoLoginToken expect the mobile app's client marker.
+    static let kontoPortalUserAgent = "Dalvik/2.1.0 (Linux; U; Android 13; Pixel 7 Build/TQ3A.230805.001) LibrusMobileApp"
     static let acceptLanguage = "pl-PL,pl;q=0.9,en;q=0.8"
 
     static let loginHeaders: [String: String] = [

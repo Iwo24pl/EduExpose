@@ -137,7 +137,7 @@ actor LibrusPortalClient: LibrusPortalBridging {
             guard retryable else {
                 throw error
             }
-            current = try await freshChild(current)
+            current = try await freshChild(current, force: true)
             return try await bridgeChild(current)
         }
     }
@@ -324,9 +324,10 @@ actor LibrusPortalClient: LibrusPortalBridging {
         }
     }
 
-    private func freshChild(_ state: LibrusPortalState) async throws -> LibrusPortalState {
+    private func freshChild(_ state: LibrusPortalState, force: Bool = false) async throws -> LibrusPortalState {
         var current = state
-        if current.portalAccessToken.isEmpty
+        if force
+            || current.portalAccessToken.isEmpty
             || (current.portalExpiresAt.map { $0 < Date().addingTimeInterval(60) } ?? true) {
             current = try await refreshPortal(current)
         }
@@ -499,7 +500,7 @@ actor LibrusPortalClient: LibrusPortalBridging {
         var headers: [String: String] = [
             "Accept": "*/*",
             "X-Requested-With": LibrusConstants.kontoPortalRequestedWith,
-            "User-Agent": LibrusConstants.userAgent
+            "User-Agent": LibrusConstants.kontoPortalUserAgent
         ]
         if let referer {
             headers["Referer"] = referer

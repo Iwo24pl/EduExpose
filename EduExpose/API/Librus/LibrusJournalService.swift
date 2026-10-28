@@ -176,9 +176,9 @@ actor LibrusJournalService: JournalService {
     func attendance(period: Period) async throws -> AttendanceSnapshot {
         do {
             let attendanceResponse = try await client.attendances()
-            let types = try await attendanceTypeList()
+            let types = (try? await attendanceTypeList()) ?? []
             let subjects = try await subjectMap()
-            let lessons = try await lessonSubjectMap()
+            let lessons = (try? await lessonSubjectMap()) ?? [:]
             return LibrusMapper.attendance(
                 period: period,
                 attendances: attendanceResponse.attendances ?? [],

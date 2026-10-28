@@ -149,8 +149,12 @@ final class AppModel {
             return
         }
 
+        isBusy = true
+        defer { isBusy = false }
+
         var merged = students
         var installed = 0
+        var firstInstalledID: String?
         var firstError: String?
         for student in chosen {
             do {
@@ -161,6 +165,9 @@ final class AppModel {
                     merged.append(student)
                 }
                 installed += 1
+                if firstInstalledID == nil {
+                    firstInstalledID = student.id
+                }
             } catch {
                 if firstError == nil {
                     firstError = Self.describe(error)
@@ -175,7 +182,7 @@ final class AppModel {
 
         cachedMailService = nil
         students = merged.sorted { $0.account.displayName < $1.account.displayName }
-        activeID = chosen.first?.id ?? activeID
+        activeID = firstInstalledID ?? activeID
         pending = []
         selected = []
         isAddingAccount = false
