@@ -433,7 +433,7 @@ enum LibrusMapper {
 
         for record in filtered {
             guard let entry = entriesByID[record.id.stableInt] else { continue }
-            let subjectID = record.lesson?.id.flatMap { lessonSubjects[$0] }
+            let subjectID = (record.lesson?.id).flatMap { lessonSubjects[$0] }
             grouped[subjectID ?? LibrusID("0"), default: []].append(entry)
         }
 
