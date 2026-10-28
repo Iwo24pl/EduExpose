@@ -399,7 +399,7 @@ actor LibrusPortalClient: LibrusPortalBridging {
         }
         let token: String
         do {
-            guard let value = try JSONDecoder().decode(LibrusAutoLoginEnvelope.self, from: response.body).token,
+            guard let value = try JSONDecoder.vulcan().decode(LibrusAutoLoginEnvelope.self, from: response.body).token,
                   !value.isEmpty else {
                 throw LibrusError.unexpectedResponse
             }

@@ -205,6 +205,7 @@ Buildy `latest` są oznaczone jako prerelease. Stabilne wydania publikuj tagiem
 | [docs/prometheus-login-helper.md](docs/prometheus-login-helper.md) | helper logowania Prometheus |
 | [docs/login-and-hebece-client.md](docs/login-and-hebece-client.md) | rejestracja i podpisywanie Hebe CE |
 | [docs/eduvulcan-mail-api.md](docs/eduvulcan-mail-api.md) | endpointy nowego API wiadomości |
+| [docs/librus-backend.md](docs/librus-backend.md) | Librus: logowanie, wielodzieci, frekwencja i bezpieczeństwo sesji |
 | [docs/sideloading.md](docs/sideloading.md) | instalacja przez iLoader i SideStore |
 | [docs/roadmap.md](docs/roadmap.md) | status, etapy i decyzje projektowe |
 
