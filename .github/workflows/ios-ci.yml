@@ -19,12 +19,12 @@ permissions:
 env:
   SCHEME: EduExpose
   PROJECT: EduExpose.xcodeproj
-  XCODE_VERSION: "26.6"
+  XCODE_VERSION: "26.3"
 
 jobs:
   test:
     name: Build, test, package
-    runs-on: macos-26
+    runs-on: macos-15
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v7
