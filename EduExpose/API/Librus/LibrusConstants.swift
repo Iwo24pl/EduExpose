@@ -19,15 +19,15 @@ enum LibrusConstants {
     static let messagesBootstrapURL = URL(string: "https://synergia.librus.pl/wiadomosci3")!
     static let gatewayBase = URL(string: "https://synergia.librus.pl/gateway/api/2.0/")!
     static let messagesBase = URL(string: "https://wiadomosci.librus.pl/api/")!
-    static let portalAuthorizeURL = URL(string: "https://portal.librus.pl/konto-librus/redirect/dru")!
-    static let portalLoginURL = URL(string: "https://portal.librus.pl/konto-librus/login/action")!
-    static let portalTokenURL = URL(string: "https://portal.librus.pl/oauth2/access_token")!
-    static let portalAccountsURL = URL(string: "https://portal.librus.pl/api/v3/SynergiaAccounts")!
-    static let portalFreshBase = URL(string: "https://portal.librus.pl/api/v3/SynergiaAccounts/fresh/")!
+    static let kontoPortalAuthorizeURL = URL(string: "https://portal.librus.pl/konto-librus/redirect/dru")!
+    static let kontoPortalLoginURL = URL(string: "https://portal.librus.pl/konto-librus/login/action")!
+    static let kontoPortalTokenURL = URL(string: "https://portal.librus.pl/oauth2/access_token")!
+    static let kontoPortalAccountsURL = URL(string: "https://portal.librus.pl/api/v3/SynergiaAccounts")!
+    static let kontoPortalFreshBase = URL(string: "https://portal.librus.pl/api/v3/SynergiaAccounts/fresh/")!
     static let autoLoginTokenURL = URL(string: "https://api.librus.pl/2.0/AutoLoginToken")!
-    static let portalClientID = "VaItV6oRutdo8fnjJwysnTjVlvaswf52ZqmXsJGP"
-    static let portalRedirectURI = "app://librus"
-    static let portalRequestedWith = "pl.librus.synergiaDru2"
+    static let kontoPortalClientID = "VaItV6oRutdo8fnjJwysnTjVlvaswf52ZqmXsJGP"
+    static let kontoPortalRedirectURI = "app://librus"
+    static let kontoPortalRequestedWith = "pl.librus.synergiaDru2"
 
     static let oauthTokenCookie = "oauth_token"
     static let deviceCookie = "DeviceCookie"

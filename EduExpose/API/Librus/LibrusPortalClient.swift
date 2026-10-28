@@ -125,7 +125,16 @@ actor LibrusPortalClient: LibrusPortalBridging {
         do {
             return try await bridgeChild(current)
         } catch let error as LibrusError {
-            guard case .httpStatus(let status) = error, status == 401 || status == 403 else {
+            let retryable: Bool
+            switch error {
+            case .httpStatus(let status) where status == 401 || status == 403:
+                retryable = true
+            case .invalidCredentials:
+                retryable = true
+            default:
+                retryable = false
+            }
+            guard retryable else {
                 throw error
             }
             current = try await freshChild(current)
@@ -136,7 +145,7 @@ actor LibrusPortalClient: LibrusPortalBridging {
     // MARK: HTTP flow
 
     private func authorizationCode() async throws -> String {
-        var url = LibrusConstants.portalAuthorizeURL
+        var url = LibrusConstants.kontoPortalAuthorizeURL
         for _ in 0..<12 {
             let response = try await send(
                 LibrusRequest(
@@ -188,7 +197,7 @@ actor LibrusPortalClient: LibrusPortalBridging {
         let body = FormURLEncoding.encode(form)
         let response = try await send(
             LibrusRequest(
-                url: LibrusConstants.portalLoginURL,
+                url: LibrusConstants.kontoPortalLoginURL,
                 method: "POST",
                 headers: headers,
                 body: Data(body.utf8)
@@ -254,10 +263,10 @@ actor LibrusPortalClient: LibrusPortalBridging {
 
     private func exchange(code: String) async throws -> (accessToken: String, refreshToken: String?, expiresAt: Date) {
         let body = FormURLEncoding.encode([
-            ("client_id", LibrusConstants.portalClientID),
+            ("client_id", LibrusConstants.kontoPortalClientID),
             ("grant_type", "authorization_code"),
             ("code", code),
-            ("redirect_uri", LibrusConstants.portalRedirectURI)
+            ("redirect_uri", LibrusConstants.kontoPortalRedirectURI)
         ])
         let response = try await tokenRequest(body: body)
         guard let accessToken = response.accessToken, !accessToken.isEmpty else {
@@ -275,7 +284,7 @@ actor LibrusPortalClient: LibrusPortalBridging {
         headers["Content-Type"] = "application/x-www-form-urlencoded"
         let response = try await send(
             LibrusRequest(
-                url: LibrusConstants.portalTokenURL,
+                url: LibrusConstants.kontoPortalTokenURL,
                 method: "POST",
                 headers: headers,
                 body: Data(body.utf8)
@@ -299,7 +308,7 @@ actor LibrusPortalClient: LibrusPortalBridging {
         var headers = portalHeaders(referer: nil)
         headers["Authorization"] = "Bearer \(accessToken)"
         let response = try await send(
-            LibrusRequest(url: LibrusConstants.portalAccountsURL, headers: headers),
+            LibrusRequest(url: LibrusConstants.kontoPortalAccountsURL, headers: headers),
             jar: portalJar
         )
         guard response.status == 200 else {
@@ -323,7 +332,7 @@ actor LibrusPortalClient: LibrusPortalBridging {
         }
 
         guard let url = URL(
-            string: LibrusConstants.portalFreshBase.absoluteString
+            string: LibrusConstants.kontoPortalFreshBase.absoluteString
                 + (current.accountLogin.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? current.accountLogin)
         ) else {
             throw LibrusError.unsafeURL
@@ -357,7 +366,7 @@ actor LibrusPortalClient: LibrusPortalBridging {
             throw LibrusError.reauthRequired
         }
         let body = FormURLEncoding.encode([
-            ("client_id", LibrusConstants.portalClientID),
+            ("client_id", LibrusConstants.kontoPortalClientID),
             ("grant_type", "refresh_token"),
             ("refresh_token", refreshToken)
         ])
@@ -489,7 +498,7 @@ actor LibrusPortalClient: LibrusPortalBridging {
     private func portalHeaders(referer: String?) -> [String: String] {
         var headers: [String: String] = [
             "Accept": "*/*",
-            "X-Requested-With": LibrusConstants.portalRequestedWith,
+            "X-Requested-With": LibrusConstants.kontoPortalRequestedWith,
             "User-Agent": LibrusConstants.userAgent
         ]
         if let referer {
