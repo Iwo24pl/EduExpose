@@ -10,6 +10,28 @@ struct LibrusCredentials: Sendable, Equatable {
     var password: String?
 }
 
+/// How a Librus session was established. Web-cookie sessions refresh with
+/// `/refreshToken`; portal-child sessions re-run the `AutoLoginToken` bridge.
+enum LibrusAuthMethod: String, Codable, Sendable {
+    case web
+    case portal
+}
+
+/// Everything needed to recreate one child's Synergia session from a Konto
+/// LIBRUS parent login. The child access token is short-lived; the portal
+/// refresh token is the long-lived part.
+struct LibrusPortalState: Codable, Sendable, Equatable {
+    var email: String
+    var password: String?
+    var accountID: Int
+    var accountLogin: String
+    var portalAccessToken: String
+    var portalRefreshToken: String?
+    var portalExpiresAt: Date?
+    var childAccessToken: String
+    var childExpiresAt: Date?
+}
+
 /// A persisted Librus web session.
 ///
 /// Only the cookies in `LibrusCookieJar.persistedNames` are stored. The
@@ -23,6 +45,12 @@ struct LibrusSession: Codable, Sendable, Equatable {
     var loginCount: Int
     var lastRefreshAt: Date?
     var lastRefreshFailedAt: Date?
+    var authMethod: LibrusAuthMethod? = nil
+    var portal: LibrusPortalState? = nil
+
+    var method: LibrusAuthMethod {
+        authMethod ?? (portal == nil ? .web : .portal)
+    }
 }
 
 /// Called by the session actor after a successful login/refresh or after a

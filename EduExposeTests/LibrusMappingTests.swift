@@ -183,4 +183,134 @@ struct LibrusMappingTests {
         #expect(first >= 0)
         #expect(LibrusID("41999").stableInt == 41999)
     }
+
+    @Test("Attendance records become month and subject statistics")
+    func mapsAttendance() throws {
+        let json = """
+        {"Attendances":[
+          {"Id":1,"Lesson":{"Id":10},"LessonNo":2,"Date":"2026-09-08","Semester":1,"Type":{"Id":1}},
+          {"Id":2,"Lesson":{"Id":10},"LessonNo":2,"Date":"2026-09-09","Semester":1,"Type":{"Id":3}},
+          {"Id":3,"Lesson":{"Id":11},"LessonNo":3,"Date":"2026-09-10","Semester":1,"Type":{"Id":2}}
+        ]}
+        """
+        let envelope = try decode(LibrusAttendancesEnvelope.self, json)
+        let types = [
+            LibrusAttendanceType(id: LibrusID("1"), name: "Nieobecność", short: "nb", isPresenceKind: false),
+            LibrusAttendanceType(id: LibrusID("2"), name: "Spóźnienie", short: "sp", isPresenceKind: true),
+            LibrusAttendanceType(id: LibrusID("3"), name: "Nieobecność uspr.", short: "nb-u", isPresenceKind: false)
+        ]
+        let period = Period(
+            id: 0,
+            level: 1,
+            number: 0,
+            startAt: "2026-09-01",
+            endAt: "2027-06-30",
+            current: false,
+            last: false
+        )
+
+        let snapshot = LibrusMapper.attendance(
+            period: period,
+            attendances: envelope.attendances ?? [],
+            types: types,
+            lessonSubjects: [
+                LibrusID("10"): LibrusID("100"),
+                LibrusID("11"): LibrusID("101")
+            ],
+            subjects: [
+                LibrusID("100"): "Matematyka",
+                LibrusID("101"): "Fizyka"
+            ]
+        )
+
+        #expect(snapshot.entries.count == 3)
+        #expect(snapshot.yearSummary?.month == 0)
+        #expect(snapshot.totals.absences == 2)
+        #expect(snapshot.totals.absencesJustified == 1)
+        #expect(snapshot.totals.lateArrivals == 1)
+        #expect(snapshot.subjects.count == 2)
+        #expect(snapshot.subjects.first(where: { $0.subjectName == "Matematyka" })?.absences == 2)
+        #expect(snapshot.visibleEntries.count == 3)
+    }
+
+    @Test("A semester period filters attendance by its Semester field")
+    func filtersAttendanceBySemester() throws {
+        let json = """
+        {"Attendances":[
+          {"Id":1,"Lesson":{"Id":10},"LessonNo":2,"Date":"2026-09-08","Semester":1,"Type":{"Id":1}},
+          {"Id":2,"Lesson":{"Id":10},"LessonNo":2,"Date":"2027-02-08","Semester":2,"Type":{"Id":1}}
+        ]}
+        """
+        let envelope = try decode(LibrusAttendancesEnvelope.self, json)
+        let type = LibrusAttendanceType(
+            id: LibrusID("1"),
+            name: "Nieobecność",
+            short: "nb",
+            isPresenceKind: false
+        )
+        let period = Period(
+            id: 1,
+            level: 1,
+            number: 1,
+            startAt: "2026-09-01",
+            endAt: "2027-01-31",
+            current: true,
+            last: false
+        )
+        let snapshot = LibrusMapper.attendance(
+            period: period,
+            attendances: envelope.attendances ?? [],
+            types: [type],
+            lessonSubjects: [LibrusID("10"): LibrusID("100")],
+            subjects: [LibrusID("100"): "Matematyka"]
+        )
+        #expect(snapshot.entries.count == 1)
+        #expect(snapshot.totals.absences == 1)
+    }
+
+    @Test("Portal account lists decode all children from one parent login")
+    func decodesPortalAccounts() throws {
+        let json = """
+        {"accounts":[
+          {"id":42,"login":"1234567u","accessToken":"child-token-1","studentName":"Ola Kowalska","group":"student","state":"active"},
+          {"id":43,"login":"7654321u","accessToken":"child-token-2","studentName":"Jan Kowalski","group":"student","state":"active"}
+        ],"lastModification":1800000000}
+        """
+        let envelope = try decode(LibrusPortalAccountsEnvelope.self, json)
+        #expect(envelope.accounts?.count == 2)
+        #expect(envelope.accounts?.first?.login == "1234567u")
+        #expect(envelope.accounts?.last?.studentName == "Jan Kowalski")
+        #expect(envelope.accounts?.first?.id.stableInt == 42)
+    }
+
+    @Test("Portal app redirect exposes the authorization code")
+    func parsesPortalCode() {
+        #expect(
+            LibrusPortalClient.authorizationCode(
+                in: "app://librus?code=abc123&state=x"
+            ) == "abc123"
+        )
+        #expect(LibrusPortalClient.authorizationCode(in: "app://librus?command=close") == nil)
+        #expect(
+            LibrusPortalClient.authorizationCode(
+                in: "https://portal.librus.pl/konto-librus/redirect/dru?code=def456"
+            ) == "def456"
+        )
+    }
+
+    @Test("Portal CSRF and hidden fields are extracted from a login page")
+    func parsesPortalLoginPage() {
+        let html = """
+        <html><head><meta name="csrf-token" content="token-123"></head>
+        <body><form method="post" action="/konto-librus/login/action">
+        <input type="hidden" name="_csrf" value="token-123">
+        <input type="hidden" name="redirect" value="/konto-librus">
+        <input type="text" name="email">
+        </form></body></html>
+        """
+        #expect(LibrusPortalClient.csrfToken(in: html) == "token-123")
+        #expect(LibrusPortalClient.hiddenFields(in: html)["_csrf"] == "token-123")
+        #expect(LibrusPortalClient.hiddenFields(in: html)["redirect"] == "/konto-librus")
+        #expect(LibrusPortalClient.hiddenFields(in: html)["email"] == nil)
+    }
 }

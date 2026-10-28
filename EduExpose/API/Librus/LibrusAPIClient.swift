@@ -88,6 +88,20 @@ struct LibrusAPIClient: Sendable {
         try await get("LuckyNumbers")
     }
 
+    func attendances() async throws -> LibrusAttendancesEnvelope {
+        try await get("Attendances")
+    }
+
+    func attendanceTypes() async throws -> LibrusAttendanceTypesEnvelope {
+        try await get("Attendances/Types")
+    }
+
+    /// Global lesson-id → subject lookup used to attribute an attendance
+    /// record to a subject.
+    func lessons() async throws -> LibrusLessonsEnvelope {
+        try await get("Lessons")
+    }
+
     // MARK: Messages
 
     /// The Wiadomości subsystem has its own session. This bootstrap call

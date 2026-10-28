@@ -19,6 +19,7 @@ actor LibrusSessionActor {
     private let clock: any LibrusClock
     private let trace: LibrusTrace
     private let onSessionUpdate: LibrusSessionObserver?
+    private let portalBridge: (any LibrusPortalBridging)?
 
     private var session: LibrusSession?
     private var loginTask: Task<LibrusSession, any Error>?
@@ -33,7 +34,8 @@ actor LibrusSessionActor {
         transport: any LibrusTransport,
         clock: any LibrusClock = LibrusSystemClock(),
         trace: LibrusTrace = LibrusTrace(),
-        onSessionUpdate: LibrusSessionObserver? = nil
+        onSessionUpdate: LibrusSessionObserver? = nil,
+        portalBridge: (any LibrusPortalBridging)? = nil
     ) {
         self.session = session
         self.credentials = credentials
@@ -42,6 +44,7 @@ actor LibrusSessionActor {
         self.clock = clock
         self.trace = trace
         self.onSessionUpdate = onSessionUpdate
+        self.portalBridge = portalBridge
     }
 
     // MARK: Public state
@@ -89,10 +92,16 @@ actor LibrusSessionActor {
         }
 
         let age = clock.now.timeIntervalSince(current.loggedInAt)
-        if age >= LibrusConstants.sessionLifetime - LibrusConstants.sessionSafetyMargin {
+        let lifetime = current.method == .portal
+            ? LibrusConstants.portalSessionLifetime
+            : LibrusConstants.sessionLifetime
+        let refreshAfter = current.method == .portal
+            ? LibrusConstants.portalSessionRefreshAfter
+            : LibrusConstants.sessionRefreshAfter
+        if age >= lifetime - LibrusConstants.sessionSafetyMargin {
             return try await loginShared()
         }
-        if age >= LibrusConstants.sessionRefreshAfter {
+        if age >= refreshAfter {
             if await refreshShared() {
                 if let refreshed = session {
                     return refreshed
@@ -111,7 +120,10 @@ actor LibrusSessionActor {
 
     private func isValid(_ session: LibrusSession) -> Bool {
         let age = clock.now.timeIntervalSince(session.loggedInAt)
-        return age < LibrusConstants.sessionLifetime - LibrusConstants.sessionSafetyMargin
+        let lifetime = session.method == .portal
+            ? LibrusConstants.portalSessionLifetime
+            : LibrusConstants.sessionLifetime
+        return age < lifetime - LibrusConstants.sessionSafetyMargin
     }
 
     /// Sends one request. `authenticated` is false only for raw transport
@@ -243,13 +255,28 @@ actor LibrusSessionActor {
 
         await trace.record("login.start")
         do {
-            try await handshake()
-            let cookies = await jar.snapshotPersistable()
-            guard cookies.contains(where: {
-                $0.name == LibrusConstants.oauthTokenCookie
-                    && LibrusHosts.isSynergia($0.domain)
-            }) else {
-                throw LibrusError.unexpectedResponse
+            let cookies: [LibrusCookie]
+            let portalState: LibrusPortalState?
+
+            if let current = session, current.method == .portal {
+                guard let portalBridge, let state = current.portal else {
+                    throw LibrusError.reauthRequired
+                }
+                let bridged = try await portalBridge.bridge(state)
+                await jar.clear()
+                await jar.restore(bridged.cookies)
+                cookies = await jar.snapshotPersistable()
+                portalState = bridged.state
+            } else {
+                try await handshake()
+                cookies = await jar.snapshotPersistable()
+                guard cookies.contains(where: {
+                    $0.name == LibrusConstants.oauthTokenCookie
+                        && LibrusHosts.isSynergia($0.domain)
+                }) else {
+                    throw LibrusError.unexpectedResponse
+                }
+                portalState = nil
             }
 
             let count = (session?.loginCount ?? 0) + 1
@@ -260,7 +287,9 @@ actor LibrusSessionActor {
                 loggedInAt: now,
                 loginCount: count,
                 lastRefreshAt: nil,
-                lastRefreshFailedAt: nil
+                lastRefreshFailedAt: nil,
+                authMethod: portalState == nil ? .web : .portal,
+                portal: portalState
             )
             session = newSession
             reauthRequired = false
@@ -322,6 +351,10 @@ actor LibrusSessionActor {
             return false
         }
 
+        if current.method == .portal {
+            return await performPortalRefresh(current, now: now)
+        }
+
         let jarCookies = await jar.snapshot()
         let oldToken = jarCookies.first {
             $0.name == LibrusConstants.oauthTokenCookie
@@ -365,6 +398,49 @@ actor LibrusSessionActor {
     }
 
     // MARK: Handshake
+
+    private func performPortalRefresh(_ current: LibrusSession, now: Date) async -> Bool {
+        guard let portalBridge, let state = current.portal else {
+            return false
+        }
+        await trace.record("refresh.start")
+        do {
+            let bridged = try await portalBridge.bridge(state)
+            await jar.clear()
+            await jar.restore(bridged.cookies)
+            let cookies = await jar.snapshotPersistable()
+            guard cookies.contains(where: {
+                ($0.name == "DZIENNIKSID" || $0.name == "SDZIENNIKSID")
+                    && LibrusHosts.isSynergia($0.domain)
+            }) else {
+                throw LibrusError.unexpectedResponse
+            }
+
+            var updated = current
+            updated.loggedInAt = now
+            updated.lastRefreshAt = now
+            updated.lastRefreshFailedAt = nil
+            updated.cookies = cookies
+            updated.authMethod = .portal
+            updated.portal = bridged.state
+            session = updated
+            await trace.record("refresh.ok")
+            if let onSessionUpdate {
+                await onSessionUpdate(updated)
+            }
+            return true
+        } catch {
+            var failed = current
+            failed.lastRefreshFailedAt = now
+            failed.cookies = await jar.snapshotPersistable()
+            session = failed
+            await trace.record("refresh.fail")
+            if let onSessionUpdate {
+                await onSessionUpdate(failed)
+            }
+            return false
+        }
+    }
 
     private func handshake() async throws {
         guard let password = credentials.password, !password.isEmpty else {

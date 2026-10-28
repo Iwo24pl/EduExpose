@@ -356,6 +356,41 @@ struct LibrusLuckyNumber: Decodable {
     let luckyNumberDay: String?
 }
 
+// MARK: - Attendance
+
+struct LibrusAttendancesEnvelope: Decodable, Sendable {
+    let attendances: [LibrusAttendance]?
+}
+
+struct LibrusAttendance: Decodable, Sendable {
+    let id: LibrusID
+    let lesson: LibrusReference?
+    let lessonNo: Int?
+    let date: String?
+    let semester: Int?
+    let type: LibrusReference?
+}
+
+struct LibrusAttendanceTypesEnvelope: Decodable, Sendable {
+    let types: [LibrusAttendanceType]?
+}
+
+struct LibrusAttendanceType: Decodable, Sendable {
+    let id: LibrusID
+    let name: String?
+    let short: String?
+    let isPresenceKind: Bool?
+}
+
+struct LibrusLessonsEnvelope: Decodable, Sendable {
+    let lessons: [LibrusLessonDefinition]?
+}
+
+struct LibrusLessonDefinition: Decodable, Sendable {
+    let id: LibrusID
+    let subject: LibrusReference?
+}
+
 // MARK: - Messages
 
 struct LibrusUnreadEnvelope: Decodable {

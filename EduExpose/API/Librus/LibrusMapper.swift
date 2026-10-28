@@ -295,6 +295,211 @@ enum LibrusMapper {
         return LuckyNumber(day: day, number: number)
     }
 
+    // MARK: Attendance
+
+    /// Librus exposes raw attendance records, not the per-month and
+    /// per-subject statistics VULCAN returns. The derived numbers use the
+    /// same semantics as the attendance screen: a record whose type is an
+    /// absence lowers the percentage; late arrivals remain present.
+    static func attendance(
+        period: Period,
+        attendances: [LibrusAttendance],
+        types: [LibrusAttendanceType],
+        lessonSubjects: [LibrusID: LibrusID],
+        subjects: [LibrusID: String]
+    ) -> AttendanceSnapshot {
+        let typeMap = Dictionary(
+            grouping: types,
+            by: { $0.id }
+        ).compactMapValues { $0.first }
+        let filtered = attendances.filter { record in
+            guard let number = period.number, number != 0 else { return true }
+            if let semester = record.semester {
+                return semester == number
+            }
+            guard let day = record.date.map({ String($0.prefix(10)) }) else { return false }
+            return LibrusDate.isDay(
+                day,
+                between: String(period.startAt.prefix(10)),
+                to: String(period.endAt.prefix(10))
+            )
+        }
+
+        let entries = filtered.map { record -> PresenceExtra in
+            let type = record.type.flatMap { typeMap[$0.id] }
+            let presence = presenceType(type)
+            let position = record.lessonNo ?? 0
+            return PresenceExtra(
+                id: record.id.stableInt,
+                presenceType: presence,
+                dayAt: String((record.date ?? "").prefix(10)),
+                timeSlot: Timeslot(
+                    id: position,
+                    start: "",
+                    end: "",
+                    display: position > 0 ? "Lekcja \(position)" : nil,
+                    position: position
+                ),
+                idWeakRef: record.lesson?.id.stableInt,
+                type: presence?.id ?? 0
+            )
+        }
+
+        let months = monthStats(
+            entries: entries,
+            period: period,
+            includeYearSummary: true
+        )
+        let subjectsStats = subjectStats(
+            filtered: filtered,
+            entries: entries,
+            period: period,
+            lessonSubjects: lessonSubjects,
+            subjects: subjects
+        )
+
+        return AttendanceSnapshot(
+            period: period,
+            months: months,
+            subjects: subjectsStats,
+            entries: entries
+        )
+    }
+
+    static func presenceType(_ type: LibrusAttendanceType?) -> PresenceType? {
+        guard let type else { return nil }
+        let name = type.name ?? type.short ?? "Frekwencja"
+        let lower = name.lowercased()
+        let absence = lower.contains("nieobecn")
+        let late = lower.contains("spóźn") || lower.contains("spozn")
+        let justified = lower.contains("uspr")
+            || lower.contains("uspraw")
+            || lower.contains("zwoln")
+        let legal = lower.contains("zwoln") || lower.contains("legal")
+        let presence = !absence && (type.isPresenceKind == true || lower.contains("obecn"))
+
+        return PresenceType(
+            id: type.id.stableInt,
+            symbol: type.short ?? String(name.prefix(4)),
+            name: name,
+            categoryId: 0,
+            categoryName: absence ? "Nieobecność" : (late ? "Spóźnienie" : "Frekwencja"),
+            position: type.id.stableInt,
+            presence: presence,
+            absence: absence,
+            legalAbsence: legal,
+            late: late,
+            absenceJustified: justified,
+            removed: false
+        )
+    }
+
+    private static func monthStats(
+        entries: [PresenceExtra],
+        period: Period,
+        includeYearSummary: Bool
+    ) -> [PresenceMonthStats] {
+        let grouped = Dictionary(grouping: entries) { entry -> Int in
+            let day = String(entry.dayAt.prefix(10))
+            let parts = day.split(separator: "-")
+            return parts.count >= 2 ? (Int(parts[1]) ?? 0) : 0
+        }
+
+        var result = grouped
+            .filter { $0.key > 0 }
+            .map { month, items in
+                stats(period: period, month: month, entries: items)
+            }
+            .sorted { $0.month < $1.month }
+
+        if includeYearSummary {
+            result.insert(stats(period: period, month: 0, entries: entries), at: 0)
+        }
+        return result
+    }
+
+    private static func subjectStats(
+        filtered: [LibrusAttendance],
+        entries: [PresenceExtra],
+        period: Period,
+        lessonSubjects: [LibrusID: LibrusID],
+        subjects: [LibrusID: String]
+    ) -> [PresenceSubjectStats] {
+        let entriesByID = Dictionary(
+            grouping: entries,
+            by: { $0.id }
+        ).compactMapValues { $0.first }
+        var grouped: [LibrusID: [PresenceExtra]] = [:]
+
+        for record in filtered {
+            guard let entry = entriesByID[record.id.stableInt] else { continue }
+            let subjectID = record.lesson?.id.flatMap { lessonSubjects[$0] }
+            grouped[subjectID ?? LibrusID("0"), default: []].append(entry)
+        }
+
+        return grouped.map { subjectID, items in
+            let base = stats(period: period, month: 0, entries: items)
+            return PresenceSubjectStats(
+                periodId: period.id,
+                subjectId: subjectID.stableInt,
+                subjectName: subjects[subjectID] ?? "Inne",
+                presencePercentage: base.presencePercentage,
+                absences: base.absences,
+                absencesJustified: base.absencesJustified,
+                lateArrivals: base.lateArrivals,
+                lateArrivalsJustified: base.lateArrivalsJustified,
+                exemptions: base.exemptions,
+                absencesDueToSchool: base.absencesDueToSchool
+            )
+        }
+        .sorted { $0.subjectName < $1.subjectName }
+    }
+
+    private static func stats(
+        period: Period,
+        month: Int,
+        entries: [PresenceExtra]
+    ) -> PresenceMonthStats {
+        var absences = 0
+        var justified = 0
+        var late = 0
+        var lateJustified = 0
+        var exemptions = 0
+        var present = 0
+
+        for entry in entries {
+            guard let type = entry.presenceType else { continue }
+            if type.absence {
+                absences += 1
+                if type.absenceJustified { justified += 1 }
+            } else {
+                present += 1
+            }
+            if type.late {
+                late += 1
+                if type.absenceJustified { lateJustified += 1 }
+            }
+            if type.legalAbsence {
+                exemptions += 1
+            }
+        }
+
+        let total = max(entries.count, 1)
+        let percentage = Double(present) / Double(total) * 100
+
+        return PresenceMonthStats(
+            periodId: period.id,
+            month: month,
+            presencePercentage: percentage,
+            absences: absences,
+            absencesJustified: justified,
+            lateArrivals: late,
+            lateArrivalsJustified: lateJustified,
+            exemptions: exemptions,
+            absencesDueToSchool: 0
+        )
+    }
+
     // MARK: Helpers
 
     private static func subject(_ id: LibrusID?, name: String?) -> Subject {

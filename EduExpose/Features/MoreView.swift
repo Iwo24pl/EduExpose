@@ -126,8 +126,13 @@ struct MoreView: View {
                         .foregroundStyle(Palette.onSurfaceVariant)
                         .fixedSize(horizontal: false, vertical: true)
 
-                    if let classLabel = account.classLabel {
-                        InfoPill(text: classLabel, icon: "person.3")
+                    HStack(spacing: 8) {
+                        if let provider = model.activeProvider {
+                            ProviderBadge(provider: provider)
+                        }
+                        if let classLabel = account.classLabel {
+                            InfoPill(text: classLabel, icon: "person.3")
+                        }
                     }
                 } else {
                     Text("Brak aktywnego ucznia")
