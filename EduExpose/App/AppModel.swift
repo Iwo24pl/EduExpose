@@ -129,7 +129,6 @@ final class AppModel {
                 }
             case .librus:
                 found = try await librusAuth.signIn(login: login, password: password)
-                mailCookies = [:]
             }
 
             cachedMailService = nil

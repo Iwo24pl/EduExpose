@@ -41,12 +41,12 @@ enum EduRegistry: String, Codable, CaseIterable, Identifiable, Hashable, Sendabl
         }
     }
 
-    /// The web-cookie Librus flow exposes one student per session. The
-    /// multi-child importer is a separate, opt-in follow-up.
+    /// Konto LIBRUS can expose several children from one parent login; the
+    /// fallback web login still exposes one.
     var supportsMultipleStudentsPerLogin: Bool {
         switch self {
         case .eduVulcan: return true
-        case .librus: return false
+        case .librus: return true
         }
     }
 }
