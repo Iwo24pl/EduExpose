@@ -13,6 +13,8 @@ actor LibrusJournalService: JournalService {
     private var gradeCommentsCache: (at: Date, values: [LibrusID: String])?
     private var homeworkCategoriesCache: (at: Date, values: [LibrusID: String])?
     private var noteCategoriesCache: (at: Date, values: [LibrusID: String])?
+    private var lessonsCache: (at: Date, values: [LibrusID: LibrusID])?
+    private var attendanceTypesCache: (at: Date, values: [LibrusAttendanceType])?
 
     private var gradesCache: [Int: (at: Date, values: [Grade])] = [:]
     private var timetableCache: [String: (at: Date, values: [Schedule])] = [:]
@@ -41,7 +43,7 @@ actor LibrusJournalService: JournalService {
             comments: comments
         )
         let filtered = period?.number.map { number in
-            mapped.filter { $0.column.periodId == number }
+            number == 0 ? mapped : mapped.filter { $0.column.periodId == number }
         } ?? mapped
         gradesCache[key] = (Date(), filtered)
         return filtered
@@ -171,6 +173,32 @@ actor LibrusJournalService: JournalService {
         }
     }
 
+    func attendance(period: Period) async throws -> AttendanceSnapshot {
+        do {
+            let attendanceResponse = try await client.attendances()
+            let types = try await attendanceTypeList()
+            let subjects = try await subjectMap()
+            let lessons = try await lessonSubjectMap()
+            return LibrusMapper.attendance(
+                period: period,
+                attendances: attendanceResponse.attendances ?? [],
+                types: types,
+                lessonSubjects: lessons,
+                subjects: subjects
+            )
+        } catch {
+            if isUnavailable(error) {
+                return AttendanceSnapshot(
+                    period: period,
+                    months: [],
+                    subjects: [],
+                    entries: []
+                )
+            }
+            throw error
+        }
+    }
+
     // MARK: Lookups
 
     private func subjectMap() async throws -> [LibrusID: String] {
@@ -281,6 +309,33 @@ actor LibrusJournalService: JournalService {
             }
         }
         noteCategoriesCache = (Date(), values)
+        return values
+    }
+
+    private func attendanceTypeList() async throws -> [LibrusAttendanceType] {
+        if let cached = attendanceTypesCache,
+           fresh(cached.at, LibrusConstants.referenceDataLifetime) {
+            return cached.values
+        }
+        let response = try await client.attendanceTypes()
+        let values = response.types ?? []
+        attendanceTypesCache = (Date(), values)
+        return values
+    }
+
+    private func lessonSubjectMap() async throws -> [LibrusID: LibrusID] {
+        if let cached = lessonsCache,
+           fresh(cached.at, LibrusConstants.referenceDataLifetime) {
+            return cached.values
+        }
+        let response = try await client.lessons()
+        var values: [LibrusID: LibrusID] = [:]
+        for lesson in response.lessons ?? [] {
+            if let subject = lesson.subject?.id {
+                values[lesson.id] = subject
+            }
+        }
+        lessonsCache = (Date(), values)
         return values
     }
 

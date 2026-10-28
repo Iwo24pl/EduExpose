@@ -229,8 +229,8 @@ struct MessagesView: View {
     // MARK: - Loading
 
     private func loadCapabilities() async {
-        guard model.canSendMessages else {
-            canSend = false
+        canSend = model.mailCapabilities.canCompose
+        guard canSend else {
             mailboxes = []
             return
         }

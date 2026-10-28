@@ -44,7 +44,7 @@ struct SettingsView: View {
         }
         .presentationDetents([.large])
         .sheet(isPresented: $showMailTrace) {
-            MailTraceView(events: model.mailTrace)
+            MailTraceView(events: model.mailTrace, librus: model.librusTrace)
         }
     }
 
@@ -67,6 +67,8 @@ struct SettingsView: View {
                             .fixedSize(horizontal: false, vertical: true)
 
                         HStack(spacing: 8) {
+                            ProviderBadge(provider: model.activeStudent?.provider ?? .eduVulcan)
+
                             if let classLabel = account.classLabel {
                                 InfoPill(text: classLabel, icon: "person.3")
                             }
@@ -95,10 +97,7 @@ struct SettingsView: View {
     }
 
     private func periodTitle(_ period: Period) -> String {
-        if let number = period.number {
-            return "Okres \(number)"
-        }
-        return "Okres"
+        PeriodLabel.title(period)
     }
 
     // MARK: Students
@@ -123,13 +122,17 @@ struct SettingsView: View {
         }
     }
 
-    private func studentRow(_ student: StoredStudent) -> some View {
+    private func studentRow(_ student: RegistryStudent) -> some View {
         GlassCard {
             HStack(alignment: .center, spacing: 12) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(student.account.displayName)
-                        .font(.headline)
-                        .foregroundStyle(Palette.onSurface)
+                    HStack(spacing: 6) {
+                        Text(student.account.displayName)
+                            .font(.headline)
+                            .foregroundStyle(Palette.onSurface)
+
+                        ProviderBadge(provider: student.provider)
+                    }
 
                     Text(student.account.schoolName)
                         .font(.caption)
@@ -256,7 +259,7 @@ struct SettingsView: View {
 
             GlassCard {
                 VStack(alignment: .leading, spacing: 12) {
-                    Text("Jeśli wiadomości się nie ładują, pokaż i skopiuj dziennik. Zawiera adresy, statusy i nazwy ciasteczek, ale nie hasło ani wartości tokenów.")
+                    Text("Jeśli wiadomości lub frekwencja się nie ładują, pokaż i skopiuj dziennik. Zawiera adresy, statusy i nazwy ciasteczek, ale nie hasło ani wartości tokenów.")
                         .font(.footnote)
                         .foregroundStyle(Palette.onSurfaceVariant)
                         .fixedSize(horizontal: false, vertical: true)
@@ -311,7 +314,7 @@ struct SettingsView: View {
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(Palette.onSurface)
 
-                    Text("Nieoficjalny klient eduVULCAN. Nie jest powiązany z VULCAN.")
+                    Text("Nieoficjalny klient eduVULCAN i Librus Synergia. Nie jest powiązany z VULCAN ani Librus.")
                         .font(.footnote)
                         .foregroundStyle(Palette.onSurfaceVariant)
                         .fixedSize(horizontal: false, vertical: true)
@@ -332,6 +335,7 @@ struct SettingsView: View {
 private struct MailTraceView: View {
     @Environment(\.dismiss) private var dismiss
     let events: [MailTraceEvent]
+    let librus: [LibrusTraceEvent]
     @State private var copied = false
 
     var body: some View {
@@ -345,7 +349,7 @@ private struct MailTraceView: View {
                     .padding(20)
             }
             .background(ScreenBackground())
-            .navigationTitle("Dziennik poczty")
+            .navigationTitle("Dziennik diagnostyczny")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
@@ -365,8 +369,16 @@ private struct MailTraceView: View {
     }
 
     private var text: String {
-        events.isEmpty
-            ? "Brak wpisów. Otwórz Wiadomości i spróbuj ponownie."
-            : events.map(\.dumpLine).joined(separator: "\n\n")
+        var sections: [String] = []
+        if !events.isEmpty {
+            sections.append("=== eduVULCAN / poczta ===\n" + events.map(\.dumpLine).joined(separator: "\n\n"))
+        }
+        if !librus.isEmpty {
+            sections.append("=== Librus ===\n" + librus.map(\.dumpLine).joined(separator: "\n\n"))
+        }
+        if sections.isEmpty {
+            return "Brak wpisów. Otwórz Wiadomości lub Frekwencję i spróbuj ponownie."
+        }
+        return sections.joined(separator: "\n\n")
     }
 }

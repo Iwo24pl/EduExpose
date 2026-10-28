@@ -53,7 +53,7 @@ struct StudentsView: View {
         .padding(.top, 24)
     }
 
-    private func studentRow(_ student: StoredStudent) -> some View {
+    private func studentRow(_ student: RegistryStudent) -> some View {
         let isSelected = model.selected.contains(student.id)
 
         return Button {
@@ -66,9 +66,13 @@ struct StudentsView: View {
             GlassCard {
                 HStack(alignment: .center, spacing: 14) {
                     VStack(alignment: .leading, spacing: 6) {
-                        Text(student.account.displayName)
-                            .font(.headline)
-                            .foregroundStyle(Palette.onSurface)
+                        HStack(spacing: 8) {
+                            Text(student.account.displayName)
+                                .font(.headline)
+                                .foregroundStyle(Palette.onSurface)
+
+                            ProviderBadge(provider: student.provider)
+                        }
 
                         Text(student.account.schoolName)
                             .font(.subheadline)
@@ -97,7 +101,7 @@ struct StudentsView: View {
     private var bottomBar: some View {
         VStack(spacing: 10) {
             Button {
-                model.confirmSelection()
+                Task { await model.confirmSelection() }
             } label: {
                 Text("Kontynuuj (\(model.selected.count))")
                     .font(.headline)
@@ -106,7 +110,7 @@ struct StudentsView: View {
             }
             .buttonStyle(.glassProminent)
             .tint(Palette.primary)
-            .disabled(model.selected.isEmpty)
+            .disabled(model.selected.isEmpty || model.isBusy)
 
             if model.isAddingAccount {
                 Button("Anuluj") {

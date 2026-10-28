@@ -66,6 +66,32 @@ struct RegistryStudent: Codable, Identifiable, Sendable {
 
     var displayName: String { account.displayName }
     var schoolName: String { account.schoolName }
+
+    var eduVulcanSession: EduVulcanSession? {
+        guard case let .eduVulcan(session) = session else { return nil }
+        return session
+    }
+
+    var librusSession: LibrusSession? {
+        guard case let .librus(session) = session else { return nil }
+        return session
+    }
+
+    /// The old flat model is still the input shape of `HebeClient` and the
+    /// eduVULCAN mail client, so the adapter lives next to the migration.
+    var legacyStoredStudent: StoredStudent? {
+        guard let session = eduVulcanSession else { return nil }
+        return StoredStudent(
+            id: id,
+            account: account,
+            credential: session.credential,
+            restUrl: session.restURL,
+            login: session.login,
+            password: session.password,
+            tenant: session.tenant,
+            isEnabled: isEnabled
+        )
+    }
 }
 
 extension RegistryStudent {

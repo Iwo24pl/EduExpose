@@ -19,6 +19,15 @@ enum LibrusConstants {
     static let messagesBootstrapURL = URL(string: "https://synergia.librus.pl/wiadomosci3")!
     static let gatewayBase = URL(string: "https://synergia.librus.pl/gateway/api/2.0/")!
     static let messagesBase = URL(string: "https://wiadomosci.librus.pl/api/")!
+    static let portalAuthorizeURL = URL(string: "https://portal.librus.pl/konto-librus/redirect/dru")!
+    static let portalLoginURL = URL(string: "https://portal.librus.pl/konto-librus/login/action")!
+    static let portalTokenURL = URL(string: "https://portal.librus.pl/oauth2/access_token")!
+    static let portalAccountsURL = URL(string: "https://portal.librus.pl/api/v3/SynergiaAccounts")!
+    static let portalFreshBase = URL(string: "https://portal.librus.pl/api/v3/SynergiaAccounts/fresh/")!
+    static let autoLoginTokenURL = URL(string: "https://api.librus.pl/2.0/AutoLoginToken")!
+    static let portalClientID = "VaItV6oRutdo8fnjJwysnTjVlvaswf52ZqmXsJGP"
+    static let portalRedirectURI = "app://librus"
+    static let portalRequestedWith = "pl.librus.synergiaDru2"
 
     static let oauthTokenCookie = "oauth_token"
     static let deviceCookie = "DeviceCookie"
@@ -51,6 +60,12 @@ enum LibrusConstants {
     static let sessionLifetime: TimeInterval = 20 * 60 * 60
     static let sessionSafetyMargin: TimeInterval = 5 * 60
     static let sessionRefreshAfter: TimeInterval = 2 * 60 * 60
+    // A Synergia session established through AutoLoginToken is a normal web
+    // session, not a 20-hour mobile OAuth session.
+    static let portalSessionLifetime: TimeInterval = 45 * 60
+    static let portalSessionRefreshAfter: TimeInterval = 30 * 60
+    static let childTokenLifetime: TimeInterval = 6 * 60 * 60
+    static let portalLoginBackoff: TimeInterval = 60
     static let refreshBackoff: TimeInterval = 30 * 60
     static let loginBackoff: TimeInterval = 60
 

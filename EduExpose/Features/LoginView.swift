@@ -9,11 +9,29 @@ struct LoginView: View {
     @State private var entered = false
     @State private var glow = false
     @State private var orbit = false
+    @AppStorage("login.registry") private var providerRaw = EduRegistry.eduVulcan.rawValue
     @FocusState private var focusedField: Field?
 
     private enum Field {
         case login
         case password
+    }
+
+    private var provider: EduRegistry {
+        EduRegistry(rawValue: providerRaw) ?? .eduVulcan
+    }
+
+    private var providerBinding: Binding<EduRegistry> {
+        Binding(
+            get: { provider },
+            set: { newValue in
+                guard newValue != provider else { return }
+                providerRaw = newValue.rawValue
+                password = ""
+                model.errorMessage = nil
+                focusedField = .login
+            }
+        )
     }
 
     private var canSubmit: Bool {
@@ -71,7 +89,7 @@ struct LoginView: View {
                     .font(.largeTitle.weight(.bold))
                     .foregroundStyle(Palette.onSurface)
 
-                Text("Dziennik eduVULCAN w natywnej formie.")
+                Text("Dwa dzienniki. Jedna natywna aplikacja.")
                     .font(.subheadline)
                     .foregroundStyle(Palette.onSurfaceVariant)
                     .multilineTextAlignment(.center)
@@ -177,15 +195,37 @@ struct LoginView: View {
     private var form: some View {
         GlassCard {
             VStack(alignment: .leading, spacing: 16) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Login")
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Dziennik")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(Palette.onSurfaceVariant)
 
-                    TextField("Login", text: $login)
+                    Picker("Dziennik", selection: providerBinding) {
+                        ForEach(EduRegistry.allCases) { registry in
+                            Text(registry.displayName).tag(registry)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .disabled(model.isBusy)
+
+                    Text(provider == .librus
+                        ? "Zaloguj się kontem Konto LIBRUS (e-mail). Jedno konto rodzica może dodać kilkoro dzieci."
+                        : "Zaloguj się loginem lub e-mailem eduVULCAN.")
+                        .font(.caption2)
+                        .foregroundStyle(Palette.onSurfaceVariant)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(provider.loginFieldLabel)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Palette.onSurfaceVariant)
+
+                    TextField(provider.loginPlaceholder, text: $login)
                         .textContentType(.username)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
+                        .keyboardType(provider == .librus ? .emailAddress : .default)
                         .submitLabel(.next)
                         .focused($focusedField, equals: .login)
                         .onSubmit {
@@ -245,7 +285,7 @@ struct LoginView: View {
     }
 
     private var footnote: some View {
-        Text("EduExpose nie jest oficjalną aplikacją VULCAN. Dane logowania trafiają wyłącznie do eduVULCAN, a sesja jest przechowywana w Keychain tego urządzenia.")
+        Text("EduExpose nie jest oficjalną aplikacją VULCAN ani Librus. Dane logowania trafiają wyłącznie do wybranego dziennika, a sesja jest przechowywana w Keychain tego urządzenia.")
             .font(.footnote)
             .foregroundStyle(Palette.onSurfaceVariant)
             .multilineTextAlignment(.center)
@@ -263,7 +303,7 @@ struct LoginView: View {
     private func submit() {
         guard canSubmit else { return }
         Task {
-            await model.login(login: login, password: password)
+            await model.login(provider: provider, login: login, password: password)
         }
     }
 }

@@ -13,6 +13,7 @@ protocol JournalService: Sendable {
     func notes() async throws -> [Note]
     func announcements() async throws -> [Announcement]
     func luckyNumber(day: Date) async throws -> Int?
+    func attendance(period: Period) async throws -> AttendanceSnapshot
 }
 
 /// The existing Hebe implementation, moved behind the protocol without
@@ -85,5 +86,42 @@ struct HebeJournalService: JournalService {
             day: VulcanDate.dateString(day)
         )
         return value?.number
+    }
+
+    func attendance(period: Period) async throws -> AttendanceSnapshot {
+        async let monthsTask = client.presenceMonthStats(
+            pupilId: account.pupil.id,
+            periodId: period.id
+        )
+        async let subjectsTask = client.presenceSubjectStats(
+            pupilId: account.pupil.id,
+            periodId: period.id
+        )
+        async let entriesTask = client.presenceExtra(
+            pupilId: account.pupil.id,
+            from: String(period.startAt.prefix(10)),
+            to: String(period.endAt.prefix(10))
+        )
+        return AttendanceSnapshot(
+            period: period,
+            months: try await monthsTask,
+            subjects: try await subjectsTask,
+            entries: try await entriesTask
+        )
+    }
+}
+
+/// One visible label for every period picker. VULCAN sends semesters only;
+/// Librus also exposes a synthetic full-year period with `number == 0`.
+enum PeriodLabel {
+    static func title(_ period: Period?) -> String {
+        guard let period else { return "Okres" }
+        if let schoolYear = AttendanceLabels.schoolYear(in: period) {
+            return "Rok szkolny \(schoolYear)"
+        }
+        if let number = period.number, number != 0 {
+            return "Okres \(number)"
+        }
+        return "Okres"
     }
 }

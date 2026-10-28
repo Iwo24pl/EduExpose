@@ -79,6 +79,15 @@ struct LibrusProfileLoader: Sendable {
 
         let periods = [
             Period(
+                id: 0,
+                level: 1,
+                number: 0,
+                startAt: start,
+                endAt: end,
+                current: false,
+                last: false
+            ),
+            Period(
                 id: 1,
                 level: 1,
                 number: 1,
