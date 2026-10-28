@@ -1,0 +1,72 @@
+name: Retry iOS CI
+
+# GitHub occasionally leaves the macOS 15/26 jobs queued until they are
+# cancelled without ever being assigned a runner. Those runs would otherwise
+# wait for the next push, so re-run them and give the pool a fresh window.
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: retry-ios-ci
+  cancel-in-progress: false
+
+jobs:
+  retry:
+    name: Re-run iOS CI when no runner was acquired
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      REPO: ${{ github.repository }}
+      MAX_ATTEMPTS: "12"
+    steps:
+      - name: Re-run the latest failed iOS CI run
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          runs=$(gh api "repos/$REPO/actions/runs?branch=swift&per_page=30")
+
+          if jq -e '[.workflow_runs[] | select(.name == "iOS CI") | select(.status != "completed")] | length > 0' <<<"$runs" >/dev/null; then
+            echo "An iOS CI run is still queued or running; leaving it alone."
+            exit 0
+          fi
+
+          latest=$(jq -r '[.workflow_runs[] | select(.name == "iOS CI") | select(.status == "completed")][0] // empty | @json' <<<"$runs")
+          if [ -z "$latest" ]; then
+            echo "No completed iOS CI run found."
+            exit 0
+          fi
+
+          id=$(jq -r .id <<<"$latest")
+          conclusion=$(jq -r .conclusion <<<"$latest")
+          attempt=$(jq -r .run_attempt <<<"$latest")
+
+          if [ "$conclusion" != "failure" ] && [ "$conclusion" != "cancelled" ]; then
+            echo "Run $id concluded '$conclusion'; nothing to retry."
+            exit 0
+          fi
+
+          if [ "$attempt" -ge "$MAX_ATTEMPTS" ]; then
+            echo "Run $id already reached attempt $attempt; leaving it for the next push."
+            exit 0
+          fi
+
+          jobs=$(gh api "repos/$REPO/actions/runs/$id/jobs?per_page=100")
+          mac_total=$(jq '[.jobs[] | select((.labels | join(",")) | test("macos"))] | length' <<<"$jobs")
+          mac_without_runner=$(jq '[.jobs[] | select((.labels | join(",")) | test("macos")) | select(.runner_name == null or .runner_name == "")] | length' <<<"$jobs")
+
+          if [ "$mac_total" -eq 0 ] || [ "$mac_without_runner" -ne "$mac_total" ]; then
+            echo "Run $id failed after a runner was assigned; not a provisioning failure."
+            exit 0
+          fi
+
+          echo "Re-running $id (attempt $attempt, $mac_without_runner/$mac_total macOS jobs never got a runner)."
+          gh api -X POST "repos/$REPO/actions/runs/$id/rerun"

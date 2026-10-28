@@ -21,9 +21,9 @@ env:
 
 jobs:
   test:
-    name: Build, test, smoke
+    name: Build, test, package
     runs-on: macos-26
-    timeout-minutes: 30
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v7
 
@@ -152,40 +152,6 @@ jobs:
           path: TestResults.xcresult
           if-no-files-found: ignore
 
-      - name: Publish failing build log
-        if: failure() && github.event_name == 'push' && github.ref == 'refs/heads/swift'
-        continue-on-error: true
-        uses: softprops/action-gh-release@v3
-        with:
-          tag_name: ci-logs
-          name: CI logs
-          prerelease: true
-          make_latest: false
-          body: |
-            Log z nieudanego builda ${{ github.sha }}.
-            Pobierz `build.log` i `test-summary.json`, aby zobaczyć błędy.
-          files: |
-            build.log
-            test-summary.json
-
-  package:
-    name: Build IPA
-    runs-on: macos-26
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Select Xcode
-        uses: maxim-lobanov/setup-xcode@v1
-        with:
-          xcode-version: ${{ env.XCODE_VERSION }}
-
-      - name: Install XcodeGen
-        run: brew install xcodegen
-
-      - name: Generate project
-        run: xcodegen generate
-
       - name: Build unsigned archive
         shell: bash
         run: |
@@ -200,7 +166,7 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
             COMPILER_INDEX_STORE_ENABLE=NO \
-            2>&1 | tee package-build.log
+            2>&1 | tee archive-build.log
 
       - name: Package unsigned IPA
         shell: bash
@@ -221,17 +187,33 @@ jobs:
             EduExpose-unsigned.ipa
             EduExpose-unsigned.ipa.sha256
 
-      - name: Upload package log
+      - name: Upload archive log
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: package-log
-          path: package-build.log
+          name: archive-log
+          path: archive-build.log
           if-no-files-found: ignore
+
+      - name: Publish failing build log
+        if: failure() && github.event_name == 'push' && github.ref == 'refs/heads/swift'
+        continue-on-error: true
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ci-logs
+          name: CI logs
+          prerelease: true
+          make_latest: false
+          body: |
+            Log z nieudanego builda ${{ github.sha }}.
+            Pobierz `build.log` i `test-summary.json`, aby zobaczyć błędy.
+          files: |
+            build.log
+            test-summary.json
 
   publish:
     name: Publish rolling prerelease
-    needs: [test, package]
+    needs: [test]
     if: github.event_name == 'push' && github.ref == 'refs/heads/swift'
     runs-on: ubuntu-latest
     timeout-minutes: 10
