@@ -348,7 +348,8 @@ enum LibrusMapper {
         let months = monthStats(
             entries: entries,
             period: period,
-            includeYearSummary: true
+            includeYearSummary: period.number == 0
+                || AttendanceLabels.schoolYear(in: period) != nil
         )
         let subjectsStats = subjectStats(
             filtered: filtered,
