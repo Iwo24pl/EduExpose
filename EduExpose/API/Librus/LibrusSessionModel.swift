@@ -12,7 +12,7 @@ struct LibrusCredentials: Sendable, Equatable {
 
 /// How a Librus session was established. Web-cookie sessions refresh with
 /// `/refreshToken`; portal-child sessions re-run the `AutoLoginToken` bridge.
-enum LibrusAuthMethod: String, Codable, Sendable {
+enum LibrusAuthMethod: String, Codable, Sendable, Equatable {
     case web
     case portal
 }

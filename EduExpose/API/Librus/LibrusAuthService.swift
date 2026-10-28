@@ -6,7 +6,7 @@ import Foundation
 /// child from a parent login. When the portal refuses a flow (a school that
 /// disabled it, a changed portal page, or a single-child Synergia account),
 /// the documented web-cookie flow remains as a fallback.
-struct LibrusAuthService: RegistryAuthService {
+struct LibrusAuthService: RegistryAuthService, Sendable {
     let transport: any LibrusTransport
     let clock: any LibrusClock
     let trace: LibrusTrace

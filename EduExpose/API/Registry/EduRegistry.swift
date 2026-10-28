@@ -4,7 +4,7 @@ import Foundation
 ///
 /// The provider is a property of the account, not of the screen. One app
 /// install can hold eduVULCAN and Librus accounts at the same time.
-enum EduRegistry: String, Codable, CaseIterable, Identifiable, Sendable {
+enum EduRegistry: String, Codable, CaseIterable, Identifiable, Hashable, Sendable {
     case eduVulcan = "eduvulcan"
     case librus
 
