@@ -272,6 +272,52 @@ struct AttendanceSnapshotTests {
         #expect(totals.schoolAbsences == 1)
     }
 
+    @Test("Counts justified absences the API reports separately")
+    func justifiedOnlyAbsences() {
+        let snapshot = AttendanceSnapshot(
+            period: period(),
+            months: [month(0, percentage: 90, absences: 0, justified: 6)],
+            subjects: [],
+            entries: []
+        )
+
+        #expect(snapshot.totals.totalAbsences == 6)
+        #expect(snapshot.totals.absencesJustified == 6)
+        #expect(snapshot.totals.unjustified == 0)
+    }
+
+    @Test("Keeps the server total when it already includes justified absences")
+    func totalIncludesJustified() {
+        let snapshot = AttendanceSnapshot(
+            period: period(),
+            months: [month(0, percentage: 90, absences: 6, justified: 4)],
+            subjects: [],
+            entries: []
+        )
+
+        #expect(snapshot.totals.totalAbsences == 6)
+        #expect(snapshot.totals.unjustified == 2)
+    }
+
+    @Test("Counts excused entries that are not flagged as absences")
+    func justifiedEntryFallback() {
+        let excused = type(id: 3, name: "Nieobecność usprawiedliwiona", absence: false, justified: true)
+        let legal = type(id: 4, name: "Nieobecność legalna", absence: false, legalAbsence: true)
+        let snapshot = AttendanceSnapshot(
+            period: period(),
+            months: [month(0, percentage: 90)],
+            subjects: [],
+            entries: [
+                entry(1, day: "2026-10-12", type: excused),
+                entry(2, day: "2026-10-13", type: legal)
+            ]
+        )
+
+        #expect(snapshot.totals.totalAbsences == 2)
+        #expect(snapshot.totals.absencesJustified == 1)
+        #expect(snapshot.totals.unjustified == 1)
+    }
+
     @Test("Orders months across the school-year boundary")
     func chronologicalMonths() {
         let snapshot = AttendanceSnapshot(

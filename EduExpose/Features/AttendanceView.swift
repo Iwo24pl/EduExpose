@@ -149,7 +149,7 @@ struct AttendanceView: View {
                             .fixedSize(horizontal: false, vertical: true)
 
                         Text(
-                            "\(countLabel(totals.absences, one: "nieobecność", few: "nieobecności", many: "nieobecności")) · "
+                            "\(countLabel(totals.totalAbsences, one: "nieobecność", few: "nieobecności", many: "nieobecności")) · "
                                 + countLabel(totals.lateArrivals, one: "spóźnienie", few: "spóźnienia", many: "spóźnień")
                         )
                         .font(.caption2)
@@ -168,10 +168,8 @@ struct AttendanceView: View {
                 ) {
                     statTile(
                         "Nieobecności",
-                        value: totals.absences,
-                        detail: totals.unjustified > 0
-                            ? "w tym \(countLabel(totals.unjustified, one: "nieusprawiedliwiona", few: "nieusprawiedliwione", many: "nieusprawiedliwionych"))"
-                            : nil,
+                        value: totals.totalAbsences,
+                        detail: absenceDetail(totals),
                         color: Palette.error
                     )
                     statTile(
@@ -308,14 +306,35 @@ struct AttendanceView: View {
         }
     }
 
+    private func absenceDetail(_ totals: AttendanceTotals) -> String? {
+        var parts: [String] = []
+        if totals.absencesJustified > 0 {
+            parts.append(countLabel(totals.absencesJustified, one: "usprawiedliwiona", few: "usprawiedliwione", many: "usprawiedliwionych"))
+        }
+        if totals.unjustified > 0 {
+            parts.append(countLabel(totals.unjustified, one: "nieusprawiedliwiona", few: "nieusprawiedliwione", many: "nieusprawiedliwionych"))
+        }
+        guard !parts.isEmpty else { return nil }
+        return "w tym " + parts.joined(separator: ", ")
+    }
+
+    private func absenceSummary(_ counts: AttendanceTotals) -> String? {
+        guard counts.totalAbsences > 0 else { return nil }
+        var text = countLabel(counts.totalAbsences, one: "nieobecność", few: "nieobecności", many: "nieobecności")
+        if counts.absencesJustified > 0 {
+            text += " (w tym \(countLabel(counts.absencesJustified, one: "usprawiedliwiona", few: "usprawiedliwione", many: "usprawiedliwionych")))"
+        }
+        return text
+    }
+
     private func monthDetail(
         _ month: PresenceMonthStats,
         totals: AttendanceTotals? = nil
     ) -> String {
         let counts = totals ?? AttendanceTotals(month: month)
         var parts: [String] = []
-        if counts.absences > 0 {
-            parts.append(countLabel(counts.absences, one: "nieobecność", few: "nieobecności", many: "nieobecności"))
+        if let absences = absenceSummary(counts) {
+            parts.append(absences)
         }
         if counts.lateArrivals > 0 {
             parts.append(countLabel(counts.lateArrivals, one: "spóźnienie", few: "spóźnienia", many: "spóźnień"))
@@ -368,9 +387,10 @@ struct AttendanceView: View {
     }
 
     private func subjectDetail(_ subject: PresenceSubjectStats) -> String {
+        let counts = AttendanceTotals(subject: subject)
         var parts: [String] = []
-        if subject.absences > 0 {
-            parts.append(countLabel(subject.absences, one: "nieobecność", few: "nieobecności", many: "nieobecności"))
+        if let absences = absenceSummary(counts) {
+            parts.append(absences)
         }
         if subject.lateArrivals > 0 {
             parts.append(countLabel(subject.lateArrivals, one: "spóźnienie", few: "spóźnienia", many: "spóźnień"))

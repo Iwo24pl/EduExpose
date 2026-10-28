@@ -80,12 +80,20 @@ struct AttendanceTotals: Equatable, Sendable {
     let exemptions: Int
     let schoolAbsences: Int
 
+    /// Deployments disagree on what `Absences` means: some send the total and
+    /// keep justified ones as a subset, others send only the unjustified count
+    /// and report the excused absences separately. A justified count above the
+    /// reported total can only be the latter, so add them instead of dropping them.
+    var totalAbsences: Int {
+        absences >= absencesJustified ? absences : absences + absencesJustified
+    }
+
     var unjustified: Int {
-        max(0, absences - absencesJustified)
+        absences >= absencesJustified ? absences - absencesJustified : absences
     }
 
     var eventCount: Int {
-        absences + lateArrivals + exemptions + schoolAbsences
+        totalAbsences + lateArrivals + exemptions + schoolAbsences
     }
 }
 
@@ -123,6 +131,17 @@ extension AttendanceTotals {
         )
     }
 
+    init(subject: PresenceSubjectStats) {
+        self.init(
+            absences: subject.absences,
+            absencesJustified: subject.absencesJustified,
+            lateArrivals: subject.lateArrivals,
+            lateArrivalsJustified: subject.lateArrivalsJustified,
+            exemptions: subject.exemptions,
+            schoolAbsences: subject.absencesDueToSchool
+        )
+    }
+
     /// Fallback when the statistics payload only carries a percentage.
     init(entries: [PresenceExtra]) {
         var absences = 0
@@ -132,7 +151,7 @@ extension AttendanceTotals {
 
         for entry in entries {
             guard let type = entry.presenceType else { continue }
-            if type.absence {
+            if type.absence || type.legalAbsence || type.absenceJustified {
                 absences += 1
             }
             if type.late {
