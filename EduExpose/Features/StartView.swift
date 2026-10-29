@@ -53,6 +53,9 @@ struct StartView: View {
                 .minimumScaleFactor(0.7)
             if let account = model.activeAccount {
                 HStack(spacing: 8) {
+                    if let provider = model.activeProvider {
+                        ProviderBadge(provider: provider)
+                    }
                     InfoPill(text: account.schoolName, icon: "building.2")
                     if let classLabel = account.classLabel {
                         InfoPill(text: classLabel, icon: "person.3")

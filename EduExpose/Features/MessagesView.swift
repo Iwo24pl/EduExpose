@@ -58,15 +58,17 @@ struct MessagesView: View {
             .navigationTitle("Wiadomości")
             .dashboardChrome()
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        Task { await openNewMessage() }
-                    } label: {
-                        Image(systemName: "square.and.pencil")
+                if model.mailCapabilities.canCompose {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button {
+                            Task { await openNewMessage() }
+                        } label: {
+                            Image(systemName: "square.and.pencil")
+                        }
+                        .tint(Palette.primary)
+                        .disabled(!canSend)
+                        .accessibilityLabel("Nowa wiadomość")
                     }
-                    .tint(Palette.primary)
-                    .disabled(!canSend)
-                    .accessibilityLabel("Nowa wiadomość")
                 }
             }
             .task(id: model.activeID) {
@@ -229,8 +231,8 @@ struct MessagesView: View {
     // MARK: - Loading
 
     private func loadCapabilities() async {
-        guard model.canSendMessages else {
-            canSend = false
+        canSend = model.mailCapabilities.canCompose
+        guard canSend else {
             mailboxes = []
             return
         }

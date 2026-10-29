@@ -5,7 +5,7 @@
 <h1 align="center">EduExpose</h1>
 
 <p align="center">
-  Natywny klient <strong>eduVULCAN</strong> dla iPhone'a.<br>
+  Natywny klient <strong>eduVULCAN</strong> i <strong>Librus Synergia</strong> dla iPhone'a.<br>
   SwiftUI · Swift 6 · iOS 26+ · Liquid Glass
 </p>
 
@@ -18,10 +18,10 @@
 
 ## O projekcie
 
-EduExpose to nieoficjalny, natywny klient dziennika **eduVULCAN** dla iPhone'a.
-Zamiast przeglądarki dostajesz aplikację SwiftUI, która łączy się bezpośrednio
-z API eduVULCAN (Prometheus) oraz VULCAN Hebe CE — bez własnego backendu,
-bez pośredników i bez analityki.
+EduExpose to nieoficjalny, natywny klient dzienników **eduVULCAN** i
+**Librus Synergia** dla iPhone'a. Zamiast przeglądarki dostajesz aplikację
+SwiftUI, która łączy się bezpośrednio z API wybranego dziennika — bez własnego
+backendu, bez pośredników i bez analityki.
 
 Projekt jest kontynuacją **Dzienniczka Szpontniczek** (Kotlin/Compose).
 Katalog `composeApp/` pozostaje w repozytorium jako implementacja referencyjna,
@@ -32,10 +32,13 @@ wydania aktualizuje się automatycznie w badge'u **wersja** u góry.
 
 **Konta i logowanie**
 
+- wybór dziennika na ekranie logowania: eduVULCAN albo Librus Synergia,
 - eduVULCAN przez Prometheus, w tym captcha proof-of-work i obsługa zgód,
+- Librus przez Konto LIBRUS: jedno konto rodzica może dodać kilkoro dzieci,
+- Librus przez klasyczne logowanie Synergii jako fallback dla jednego ucznia,
 - rejestracja urządzenia Hebe CE i podpisywanie każdego żądania RSA,
 - wielu uczniów i szkół, przełączanie aktywnego konta,
-- zapamiętana sesja w Keychain.
+- zapamiętana sesja w Keychain (dla Librusa również hasło i ciasteczka sesji).
 
 **Dziennik**
 
@@ -54,6 +57,7 @@ wydania aktualizuje się automatycznie w badge'u **wersja** u góry.
 - wysyłanie, odpowiedź, odpowiedź wszystkim i przekazywanie,
 - usuwanie: najpierw do kosza, a z kosza trwale (z potwierdzeniem),
 - podgląd załączników otrzymanych wiadomości.
+- Librus: wiadomości tylko do odczytu (bez wysyłania i usuwania w tej wersji).
 
 **Interfejs**
 
@@ -201,15 +205,18 @@ Buildy `latest` są oznaczone jako prerelease. Stabilne wydania publikuj tagiem
 | [docs/prometheus-login-helper.md](docs/prometheus-login-helper.md) | helper logowania Prometheus |
 | [docs/login-and-hebece-client.md](docs/login-and-hebece-client.md) | rejestracja i podpisywanie Hebe CE |
 | [docs/eduvulcan-mail-api.md](docs/eduvulcan-mail-api.md) | endpointy nowego API wiadomości |
+| [docs/librus-backend.md](docs/librus-backend.md) | Librus: logowanie, wielodzieci, frekwencja i bezpieczeństwo sesji |
 | [docs/sideloading.md](docs/sideloading.md) | instalacja przez iLoader i SideStore |
 | [docs/roadmap.md](docs/roadmap.md) | status, etapy i decyzje projektowe |
 
 ## Prywatność i bezpieczeństwo
 
-- Aplikacja łączy się **bezpośrednio** z serwerami VULCAN/eduVULCAN. Nie ma
-  własnego backendu, telemetrii ani reklam.
-- Login, hasło i dane sesji są przechowywane na urządzeniu (Keychain oraz
-  magazyn ciasteczek systemu). Nie są wysyłane nigdzie poza VULCAN.
+- Aplikacja łączy się **bezpośrednio** z serwerami VULCAN/eduVULCAN lub
+  Librus/Synergia — zależnie od wybranego dziennika. Nie ma własnego backendu,
+  telemetrii ani reklam.
+- Login, hasło i dane sesji są przechowywane na urządzeniu (Keychain; Librus
+  używa prywatnego magazynu ciasteczek w tej samej sesji). Nie są wysyłane
+  nigdzie poza wybrany dziennik.
 - Diagnostyka poczty (`Ustawienia → Diagnostyka`) pokazuje adresy, statusy
   i nazwy ciasteczek, ale **nie** hasła ani wartości tokenów. Dziennik możesz
   skopiować i dołączyć do zgłoszenia błędu.
@@ -220,18 +227,24 @@ Buildy `latest` są oznaczone jako prerelease. Stabilne wydania publikuj tagiem
 
 - brak wysyłania załączników (otrzymane można otworzyć),
 - konta Hebe (starsze jednostki) mają pocztę tylko do odczytu,
+- Librus ma pocztę tylko do odczytu; wysyłanie i usuwanie są wyłączone,
+- wielodzieci z jednego konta Librus wymaga włączonego Konto LIBRUS; część
+  szkół go nie udostępnia i wtedy działa logowanie Synergii dla jednego ucznia,
+- frekwencja Librusa jest liczona z wpisów, więc procent może różnić się
+  nieznacznie od statystyki szkoły,
 - brak powiadomień push (wymagają płatnego konta deweloperskiego i uprawnień),
 - darmowe Apple ID: podpis wygasa po 7 dniach, limit 3 aplikacji i 10 App ID
   tygodniowo (SideStore odświeża aplikację automatycznie),
 - wyłącznie iOS 26+ i iPhone w orientacji pionowej,
-- nieoficjalne API eduVULCAN może się zmienić bez ostrzeżenia.
+- nieoficjalne API eduVULCAN i Librusa może się zmienić bez ostrzeżenia.
 
 ## Status prawny
 
-Projekt **nie jest powiązany** z VULCAN ani eduVULCAN. Nazwy eduVULCAN,
-Dziennik VULCAN i Hebe należą do ich właścicieli. Aplikacja korzysta z tych
-samych endpointów co oficjalny klient, więc korzystasz z niej na własną
-odpowiedzialność i zgodnie z regulaminem szkoły oraz platformy.
+Projekt **nie jest powiązany** z VULCAN, eduVULCAN, Librus ani Synergia.
+Nazwy eduVULCAN, Dziennik VULCAN, Hebe, Librus i Synergia należą do ich
+właścicieli. Aplikacja korzysta z tych samych endpointów co oficjalni
+klienci, więc korzystasz z niej na własną odpowiedzialność i zgodnie z
+regulaminem szkoły oraz platformy.
 
 ## Licencja
 

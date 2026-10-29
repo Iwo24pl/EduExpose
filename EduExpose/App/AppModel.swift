@@ -32,20 +32,26 @@ final class AppModel {
     }
 
     var phase: Phase = .launching
-    var students: [StoredStudent] = []
+    var students: [RegistryStudent] = []
     var activeID: String?
-    var pending: [StoredStudent] = []
+    var pending: [RegistryStudent] = []
     var selected: Set<String> = []
     var isBusy = false
     var isAddingAccount = false
     var errorMessage: String?
     var updateInfo: UpdateInfo?
     var mailTrace: [MailTraceEvent] = []
+    var librusTrace: [LibrusTraceEvent] = []
 
     let session: URLSession
-    private var clients: [String: HebeClient] = [:]
+
+    @ObservationIgnored private var journals: [String: any JournalService] = [:]
+    @ObservationIgnored private var hebeClients: [String: HebeClient] = [:]
+    @ObservationIgnored private var librusActors: [String: LibrusSessionActor] = [:]
     @ObservationIgnored private var cachedMailService: (studentID: String, service: any MailService)?
     @ObservationIgnored private var mailCookies: [String: [CookieSnapshot]] = [:]
+    @ObservationIgnored private let librusAuth = LibrusAuthService()
+    @ObservationIgnored private let librusTraceStore = LibrusTrace()
 
     init() {
         let configuration = URLSessionConfiguration.ephemeral
@@ -59,7 +65,7 @@ final class AppModel {
         session = URLSession(configuration: configuration)
     }
 
-    var activeStudent: StoredStudent? {
+    var activeStudent: RegistryStudent? {
         students.first { $0.id == activeID }
     }
 
@@ -67,44 +73,64 @@ final class AppModel {
         activeStudent?.account
     }
 
+    var activeProvider: EduRegistry? {
+        activeStudent?.provider
+    }
+
     // MARK: Session lifecycle
 
     func bootstrap() async {
         guard phase == .launching else { return }
-        if let data = try? KeychainStore.load(),
-           let stored = try? JSONDecoder().decode([StoredStudent].self, from: data) {
-            students = stored
-            for student in stored {
-                clients[student.id] = HebeClient(student: student, session: session)
+        if let data = try? KeychainStore.load() {
+            if let stored = try? JSONDecoder().decode([RegistryStudent].self, from: data) {
+                students = stored
+            } else if let legacy = try? JSONDecoder().decode([StoredStudent].self, from: data) {
+                // EduExpose 1.x stored a flat eduVULCAN array. Keep the same
+                // Keychain account so an upgrade never loses the session.
+                students = legacy.map { RegistryStudent(legacy: $0) }
+                save()
             }
-            activeID = stored.first(where: { $0.isEnabled })?.id ?? stored.first?.id
         }
+
+        for student in students {
+            await install(student)
+        }
+        activeID = students.first(where: { $0.isEnabled })?.id ?? students.first?.id
         phase = students.isEmpty ? .login : .dashboard
     }
 
-    func login(login rawLogin: String, password: String) async {
+    func login(provider: EduRegistry, login rawLogin: String, password: String) async {
         let login = rawLogin.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !login.isEmpty, !password.isEmpty else {
-            errorMessage = "Podaj login i hasło."
+            errorMessage = provider == .librus
+                ? "Podaj e-mail i hasło do Konto LIBRUS."
+                : "Podaj login i hasło."
             return
         }
         isBusy = true
         errorMessage = nil
         do {
-            let found = try await PrometheusLoginService(session: session)
-                .signIn(login: login, password: password)
-            let portalCookies = CookieSnapshot.capturePortal(
-                HTTPCookieStorage.shared.cookies ?? []
-            )
-            await MailTraceStore.shared.record(
-                "login.cookies",
-                "count=\(portalCookies.count)"
-            )
-            // A new portal login invalidates cookies held by other accounts.
-            mailCookies = [:]
-            for student in found {
-                mailCookies[student.id] = portalCookies
+            let found: [RegistryStudent]
+            switch provider {
+            case .eduVulcan:
+                found = try await PrometheusAuthService(session: session)
+                    .signIn(login: login, password: password)
+                let portalCookies = CookieSnapshot.capturePortal(
+                    HTTPCookieStorage.shared.cookies ?? []
+                )
+                await MailTraceStore.shared.record(
+                    "login.cookies",
+                    "count=\(portalCookies.count)"
+                )
+                // A new portal login invalidates cookies held by other accounts.
+                mailCookies = [:]
+                for student in found {
+                    mailCookies[student.id] = portalCookies
+                }
+            case .librus:
+                found = try await librusAuth.signIn(login: login, password: password)
             }
+
             cachedMailService = nil
             pending = found
             selected = Set(found.map(\.id))
@@ -115,28 +141,51 @@ final class AppModel {
         isBusy = false
     }
 
-    func confirmSelection() {
+    func confirmSelection() async {
         let chosen = pending.filter { selected.contains($0.id) }
         guard !chosen.isEmpty else {
             errorMessage = "Wybierz co najmniej jednego ucznia."
             return
         }
+
+        isBusy = true
+        defer { isBusy = false }
+
         var merged = students
+        var installed = 0
+        var firstInstalledID: String?
+        var firstError: String?
         for student in chosen {
-            if let index = merged.firstIndex(where: { $0.id == student.id }) {
-                merged[index] = student
-            } else {
-                merged.append(student)
+            do {
+                try await prepare(student)
+                if let index = merged.firstIndex(where: { $0.id == student.id }) {
+                    merged[index] = student
+                } else {
+                    merged.append(student)
+                }
+                installed += 1
+                if firstInstalledID == nil {
+                    firstInstalledID = student.id
+                }
+            } catch {
+                if firstError == nil {
+                    firstError = Self.describe(error)
+                }
             }
-            clients[student.id] = HebeClient(student: student, session: session)
         }
+
+        guard installed > 0 else {
+            errorMessage = firstError ?? "Nie udało się dodać konta."
+            return
+        }
+
         cachedMailService = nil
         students = merged.sorted { $0.account.displayName < $1.account.displayName }
-        activeID = chosen.first?.id ?? activeID
+        activeID = firstInstalledID ?? activeID
         pending = []
         selected = []
         isAddingAccount = false
-        errorMessage = nil
+        errorMessage = firstError
         save()
         phase = .dashboard
     }
@@ -174,7 +223,9 @@ final class AppModel {
 
     func removeStudent(_ id: String) {
         students.removeAll { $0.id == id }
-        clients[id] = nil
+        journals[id] = nil
+        hebeClients[id] = nil
+        librusActors[id] = nil
         mailCookies[id] = nil
         if cachedMailService?.studentID == id {
             cachedMailService = nil
@@ -191,7 +242,9 @@ final class AppModel {
     func logout() {
         KeychainStore.delete()
         students = []
-        clients = [:]
+        journals = [:]
+        hebeClients = [:]
+        librusActors = [:]
         cachedMailService = nil
         mailCookies = [:]
         activeID = nil
@@ -206,6 +259,56 @@ final class AppModel {
         }
     }
 
+    /// Builds the live provider objects for one stored student. Called after
+    /// bootstrap, after account selection, and when the active session is
+    /// replaced.
+    private func prepare(_ student: RegistryStudent) async throws {
+        switch student.provider {
+        case .eduVulcan:
+            guard let legacy = student.legacyStoredStudent else {
+                throw VulcanError.message("Brak sesji eduVULCAN.")
+            }
+            let client = HebeClient(student: legacy, session: session)
+            hebeClients[student.id] = client
+            journals[student.id] = HebeJournalService(
+                client: client,
+                account: student.account
+            )
+
+        case .librus:
+            let observer = librusObserver(for: student.id)
+            let actor = try await librusAuth.makeSession(
+                for: student,
+                onSessionUpdate: observer
+            )
+            librusActors[student.id] = actor
+            journals[student.id] = LibrusJournalService(
+                session: actor,
+                trace: librusTraceStore
+            )
+        }
+    }
+
+    private func install(_ student: RegistryStudent) async {
+        do {
+            try await prepare(student)
+        } catch {
+            await traceLibrus("prepare.fail", note: student.provider.rawValue)
+        }
+    }
+
+    private func librusObserver(for id: String) -> LibrusSessionObserver {
+        { [weak self] session in
+            await self?.updateLibrusSession(session, for: id)
+        }
+    }
+
+    private func updateLibrusSession(_ session: LibrusSession, for id: String) {
+        guard let index = students.firstIndex(where: { $0.id == id }) else { return }
+        students[index].session = .librus(session)
+        save()
+    }
+
     private func save() {
         do {
             try KeychainStore.save(JSONEncoder().encode(students))
@@ -216,45 +319,40 @@ final class AppModel {
 
     // MARK: Loading
 
-    private func context() throws -> (StoredStudent, Account, HebeClient, Period) {
+    private struct Context: Sendable {
+        let student: RegistryStudent
+        let account: Account
+        let journal: any JournalService
+        let period: Period
+    }
+
+    private func context() throws -> Context {
         guard let id = activeID,
-              let student = students.first(where: { $0.id == id }),
-              let client = clients[id] else {
+              let student = students.first(where: { $0.id == id }) else {
+            throw VulcanError.noStudent
+        }
+        guard let journal = journals[id] else {
             throw VulcanError.noStudent
         }
         guard let period = student.account.currentPeriod else {
             throw VulcanError.noPeriod
         }
-        return (student, student.account, client, period)
+        return Context(
+            student: student,
+            account: student.account,
+            journal: journal,
+            period: period
+        )
     }
 
     func loadStart() async throws -> StartSnapshot {
-        let (_, account, client, period) = try context()
+        let context = try context()
         let today = Date()
-        let from = VulcanDate.dateString(VulcanDate.addDays(today, -14))
-        let to = VulcanDate.dateString(VulcanDate.addDays(today, 14))
 
-        async let gradesTask = client.grades(
-            unitId: account.unit.id,
-            pupilId: account.pupil.id,
-            periodId: period.id
-        )
-        async let examsTask = client.exams(
-            pupilId: account.pupil.id,
-            from: from,
-            to: to
-        )
-        async let homeworkTask = client.homework(
-            pupilId: account.pupil.id,
-            from: from,
-            to: to
-        )
-        let lucky = try? await client.luckyNumber(
-            pupilId: account.pupil.id,
-            constituentId: account.constituentUnit.id,
-            day: VulcanDate.dateString(today)
-        )
-
+        async let gradesTask = context.journal.grades(period: context.period)
+        async let examsTask = context.journal.exams(from: today, to: VulcanDate.addDays(today, 14))
+        async let homeworkTask = context.journal.homework(from: today, to: VulcanDate.addDays(today, 14))
+        let lucky = try? await context.journal.luckyNumber(day: today)
         let allGrades = try await gradesTask
         let allExams = try await examsTask
         let allHomework = try await homeworkTask
@@ -278,8 +376,8 @@ final class AppModel {
             .prefix(4)
 
         return StartSnapshot(
-            firstName: account.pupil.firstName,
-            lucky: lucky?.number,
+            firstName: context.account.pupil.firstName,
+            lucky: lucky,
             grades: Array(recentGrades),
             exams: Array(upcomingExams),
             homework: Array(upcomingHomework)
@@ -287,91 +385,75 @@ final class AppModel {
     }
 
     func loadGrades(period: Period) async throws -> GradesSnapshot {
-        let (_, account, client, _) = try context()
-        async let gradesTask = client.grades(
-            unitId: account.unit.id,
-            pupilId: account.pupil.id,
-            periodId: period.id
-        )
-        async let averagesTask = client.averages(
-            unitId: account.unit.id,
-            pupilId: account.pupil.id,
-            periodId: period.id
-        )
+        let context = try context()
+        async let gradesTask = context.journal.grades(period: period)
+        async let averagesTask = context.journal.averages(period: period)
         return GradesSnapshot(grades: try await gradesTask, averages: try await averagesTask)
     }
 
     func loadAttendance(period: Period) async throws -> AttendanceSnapshot {
-        let (_, account, client, _) = try context()
-        async let monthsTask = client.presenceMonthStats(
-            pupilId: account.pupil.id,
-            periodId: period.id
-        )
-        async let subjectsTask = client.presenceSubjectStats(
-            pupilId: account.pupil.id,
-            periodId: period.id
-        )
-        async let entriesTask = client.presenceExtra(
-            pupilId: account.pupil.id,
-            from: String(period.startAt.prefix(10)),
-            to: String(period.endAt.prefix(10))
-        )
-        return AttendanceSnapshot(
-            period: period,
-            months: try await monthsTask,
-            subjects: try await subjectsTask,
-            entries: try await entriesTask
-        )
+        let context = try context()
+        return try await context.journal.attendance(period: period)
     }
 
     func loadTimetable(weekStart: Date) async throws -> [Schedule] {
-        let (_, account, client, _) = try context()
-        return try await client.schedule(
-            pupilId: account.pupil.id,
-            from: VulcanDate.dateString(weekStart),
-            to: VulcanDate.dateString(VulcanDate.addDays(weekStart, 6))
+        let context = try context()
+        return try await context.journal.timetable(
+            from: weekStart,
+            to: VulcanDate.addDays(weekStart, 6)
         )
     }
 
     func loadExams(weekStart: Date) async throws -> [Exam] {
-        let (_, account, client, _) = try context()
-        return try await client.exams(
-            pupilId: account.pupil.id,
-            from: VulcanDate.dateString(weekStart),
-            to: VulcanDate.dateString(VulcanDate.addDays(weekStart, 6))
+        let context = try context()
+        return try await context.journal.exams(
+            from: weekStart,
+            to: VulcanDate.addDays(weekStart, 6)
         )
     }
 
     func loadHomework(weekStart: Date) async throws -> [Homework] {
-        let (_, account, client, _) = try context()
-        return try await client.homework(
-            pupilId: account.pupil.id,
-            from: VulcanDate.dateString(weekStart),
-            to: VulcanDate.dateString(VulcanDate.addDays(weekStart, 6))
+        let context = try context()
+        return try await context.journal.homework(
+            from: weekStart,
+            to: VulcanDate.addDays(weekStart, 6)
         )
     }
 
     func loadNotes() async throws -> [Note] {
-        let (_, account, client, _) = try context()
-        return try await client.notes(pupilId: account.pupil.id)
+        try await context().journal.notes()
     }
 
     func loadAnnouncements() async throws -> [Announcement] {
-        let (_, account, client, _) = try context()
-        return try await client.announcements(
-            unitId: account.unit.id,
-            pupilId: account.pupil.id
-        )
+        try await context().journal.announcements()
+    }
+
+    // MARK: Messages
+
+    var mailCapabilities: MailCapabilities {
+        guard let student = activeStudent else { return .readOnly }
+        return Self.capabilities(for: student)
     }
 
     var canSendMessages: Bool {
-        guard let student = activeStudent else { return false }
-        guard !student.account.unit.restURL.localizedCaseInsensitiveContains("hebe") else {
-            return false
+        mailCapabilities.canCompose
+    }
+
+    private static func capabilities(for student: RegistryStudent) -> MailCapabilities {
+        switch student.provider {
+        case .librus:
+            return .readOnly
+        case .eduVulcan:
+            let isHebe = student.account.unit.restURL.localizedCaseInsensitiveContains("hebe")
+            guard !isHebe,
+                  let session = student.eduVulcanSession,
+                  session.login?.isEmpty == false,
+                  session.password?.isEmpty == false,
+                  session.tenant?.isEmpty == false else {
+                return .readOnly
+            }
+            return .full
         }
-        return student.login?.isEmpty == false
-            && student.password?.isEmpty == false
-            && student.tenant?.isEmpty == false
     }
 
     private func currentMailService() throws -> any MailService {
@@ -383,27 +465,40 @@ final class AppModel {
         }
 
         let service: any MailService
-        if student.account.unit.restURL.localizedCaseInsensitiveContains("hebe") {
-            guard let box = student.account.messageBox?.globalKey else {
-                throw VulcanError.message("To konto nie ma skrzynki wiadomości.")
+        switch student.provider {
+        case .librus:
+            guard let actor = librusActors[student.id] else {
+                throw LibrusError.missingSession
             }
-            service = HebeMailService(
-                client: HebeClient(student: student, session: session),
-                box: box,
-                pupilID: student.account.pupil.id,
-                displayName: student.account.displayName
+            service = LibrusMailService(
+                session: actor,
+                displayName: student.account.displayName,
+                trace: librusTraceStore
             )
-        } else {
-            guard let login = student.login, !login.isEmpty,
-                  let password = student.password, !password.isEmpty,
-                  let tenant = student.tenant, !tenant.isEmpty else {
+
+        case .eduVulcan:
+            guard let legacy = student.legacyStoredStudent else {
                 throw VulcanError.message("Zaloguj się ponownie, aby otworzyć wiadomości.")
             }
-            service = PrometheusMailClient(
-                student: student,
-                session: session,
-                initialCookies: mailCookies[student.id] ?? []
-            )
+            if student.account.unit.restURL.localizedCaseInsensitiveContains("hebe") {
+                guard let box = student.account.messageBox?.globalKey else {
+                    throw VulcanError.message("To konto nie ma skrzynki wiadomości.")
+                }
+                let client = hebeClients[student.id]
+                    ?? HebeClient(student: legacy, session: session)
+                service = HebeMailService(
+                    client: client,
+                    box: box,
+                    pupilID: student.account.pupil.id,
+                    displayName: student.account.displayName
+                )
+            } else {
+                service = PrometheusMailClient(
+                    student: legacy,
+                    session: session,
+                    initialCookies: mailCookies[student.id] ?? []
+                )
+            }
         }
 
         cachedMailService = (studentID: student.id, service: service)
@@ -521,12 +616,22 @@ final class AppModel {
     /// rejected send, a failed read receipt) must not throw away cookies for
     /// every account and force another full portal login.
     private func invalidateMailSession(for error: Error) {
-        guard let mailError = error as? PrometheusMailError else { return }
-        switch mailError {
-        case .sessionExpired, .loginFailed:
-            invalidateMailSession()
-        case .missingCredentials, .noMailbox, .invalidResponse, .server:
-            break
+        if let mailError = error as? PrometheusMailError {
+            switch mailError {
+            case .sessionExpired, .loginFailed:
+                invalidateMailSession()
+            case .missingCredentials, .noMailbox, .invalidResponse, .server:
+                break
+            }
+            return
+        }
+        if let librusError = error as? LibrusError {
+            switch librusError {
+            case .sessionExpired, .reauthRequired, .missingSession:
+                invalidateMailSession()
+            default:
+                break
+            }
         }
     }
 
@@ -539,11 +644,18 @@ final class AppModel {
 
     func refreshMailTrace() async {
         mailTrace = await MailTraceStore.shared.snapshot()
+        librusTrace = await librusTraceStore.snapshot()
     }
 
     func clearMailTrace() async {
         await MailTraceStore.shared.clear()
+        await librusTraceStore.clear()
         mailTrace = []
+        librusTrace = []
+    }
+
+    private func traceLibrus(_ stage: String, note: String? = nil) async {
+        await librusTraceStore.record(stage, note: note)
     }
 
     // MARK: Update check

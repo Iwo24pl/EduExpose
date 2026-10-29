@@ -13,6 +13,8 @@ concurrency:
 
 permissions:
   contents: write
+  pull-requests: write
+  issues: write
 
 env:
   SCHEME: EduExpose
@@ -82,6 +84,34 @@ jobs:
             test 2>&1 | tee build.log
           status=${PIPESTATUS[0]}
           exit $status
+
+      - name: Comment failure excerpt
+        if: failure() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = 'build.log';
+            if (!fs.existsSync(path)) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: '### iOS build failure\nNo build log was produced.'
+              });
+              return;
+            }
+            const text = fs.readFileSync(path, 'utf8');
+            const lines = text.split('\n').filter(line =>
+              /error:|Testing failed|TEST FAILED|BUILD FAILED|The following build commands failed/.test(line)
+            );
+            const excerpt = (lines.length ? lines.slice(-100).join('\n') : text.slice(-12000)).slice(0, 60000);
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: '### iOS build failure\n```\n' + excerpt + '\n```'
+            });
 
       - name: Summarize tests
         if: always()
