@@ -129,9 +129,35 @@ enum MailSendMode: Sendable, Equatable {
     case forward
 }
 
+/// What the active mailbox implementation can actually do.
+///
+/// The screens use this to hide compose/delete actions instead of showing
+/// buttons that can only fail. Read-only is the safe default.
+struct MailCapabilities: Sendable, Equatable {
+    var canCompose: Bool
+    var canReply: Bool
+    var canForward: Bool
+    var canDelete: Bool
+
+    static let readOnly = MailCapabilities(
+        canCompose: false,
+        canReply: false,
+        canForward: false,
+        canDelete: false
+    )
+
+    static let full = MailCapabilities(
+        canCompose: true,
+        canReply: true,
+        canForward: true,
+        canDelete: true
+    )
+}
+
 // MARK: - Mail service boundary
 
 protocol MailService: Sendable {
+    var capabilities: MailCapabilities { get }
     func messages(kind: MessageKind) async throws -> [MailMessage]
     func detail(id: String) async throws -> MailMessageDetail
     func markRead(id: String) async throws
@@ -142,6 +168,12 @@ protocol MailService: Sendable {
     func forward(_ draft: MailDraft, from id: String) async throws
     func replyRecipients(for id: String) async throws -> MailReplyRecipients
     func delete(id: String, permanently: Bool) async throws
+}
+
+extension MailService {
+    /// Existing Hebe accounts are read-only; Prometheus overrides this and
+    /// Librus will provide its own capabilities.
+    var capabilities: MailCapabilities { .readOnly }
 }
 
 // MARK: - Prometheus mailbox name

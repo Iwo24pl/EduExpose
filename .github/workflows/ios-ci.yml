@@ -13,6 +13,8 @@ concurrency:
 
 permissions:
   contents: write
+  pull-requests: write
+  issues: write
 
 env:
   SCHEME: EduExpose
@@ -83,6 +85,34 @@ jobs:
           status=${PIPESTATUS[0]}
           exit $status
 
+      - name: Comment failure excerpt
+        if: failure() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = 'build.log';
+            if (!fs.existsSync(path)) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: '### iOS build failure\nNo build log was produced.'
+              });
+              return;
+            }
+            const text = fs.readFileSync(path, 'utf8');
+            const lines = text.split('\n').filter(line =>
+              /error:|Testing failed|TEST FAILED|BUILD FAILED|The following build commands failed/.test(line)
+            );
+            const excerpt = (lines.length ? lines.slice(-100).join('\n') : text.slice(-12000)).slice(0, 60000);
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: '### iOS build failure\n```\n' + excerpt + '\n```'
+            });
+
       - name: Summarize tests
         if: always()
         shell: bash
@@ -108,15 +138,19 @@ jobs:
           xcrun simctl bootstatus "$UDID" -b
           xcrun simctl terminate "$UDID" com.iwo24pl.eduexpose || true
           xcrun simctl install "$UDID" "$APP"
-          xcrun simctl launch "$UDID" com.iwo24pl.eduexpose
-          sleep 8
-          xcrun simctl io "$UDID" screenshot login.png
-          if xcrun simctl spawn "$UDID" launchctl list | grep -q com.iwo24pl.eduexpose; then
-            echo "Smoke test passed: the app is still running after launch."
-          else
-            echo "Smoke test failed: the app exited after launch."
+          xcrun simctl launch "$UDID" com.iwo24pl.eduexpose | tee launch.txt
+          if ! grep -q "com.iwo24pl.eduexpose:" launch.txt; then
+            echo "Smoke test failed: simctl launch did not return the app pid."
             exit 1
           fi
+          sleep 8
+          xcrun simctl io "$UDID" screenshot login.png
+          SIZE=$(stat -f%z login.png)
+          if [ "$SIZE" -lt 20000 ]; then
+            echo "Smoke test failed: the launch screenshot is unexpectedly small ($SIZE bytes)."
+            exit 1
+          fi
+          echo "Smoke test passed: the app launched and rendered the login screen ($SIZE byte screenshot)."
 
       - name: Publish failing build summary
         if: failure()
@@ -142,6 +176,7 @@ jobs:
             build.log
             test-summary.json
             login.png
+            launch.txt
           if-no-files-found: ignore
 
       - name: Upload test results

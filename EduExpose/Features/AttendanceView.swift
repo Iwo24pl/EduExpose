@@ -68,14 +68,7 @@ struct AttendanceView: View {
     }
 
     private func periodTitle(_ item: Period?) -> String {
-        guard let item else { return "Okres" }
-        if let schoolYear = AttendanceLabels.schoolYear(in: item) {
-            return "Rok szkolny \(schoolYear)"
-        }
-        if let number = item.number, number != 0 {
-            return "Okres \(number)"
-        }
-        return "Okres"
+        PeriodLabel.title(item)
     }
 
     // MARK: - Content

@@ -141,6 +141,8 @@ enum PrometheusMailError: LocalizedError, Sendable {
 /// endpoints are an archive/fallback for units whose `restUrl` contains
 /// `hebe`. This client follows the same SSO flow as the Kotlin reference.
 actor PrometheusMailClient: MailService {
+    nonisolated var capabilities: MailCapabilities { .full }
+
     private let tenant: String
     private let login: String
     private let password: String

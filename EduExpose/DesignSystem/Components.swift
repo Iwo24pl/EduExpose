@@ -111,6 +111,26 @@ struct InfoPill: View {
     }
 }
 
+struct ProviderBadge: View {
+    let provider: EduRegistry
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Image(systemName: provider == .librus ? "books.vertical" : "graduationcap")
+            Text(provider.displayName)
+        }
+        .font(.caption2.weight(.semibold))
+        .foregroundStyle(provider == .librus ? Palette.success : Palette.primary)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(
+            (provider == .librus ? Palette.success : Palette.primary).opacity(0.14),
+            in: Capsule()
+        )
+        .accessibilityLabel("Dziennik \(provider.displayName)")
+    }
+}
+
 struct GradeBadge: View {
     let text: String
     let value: Double?
